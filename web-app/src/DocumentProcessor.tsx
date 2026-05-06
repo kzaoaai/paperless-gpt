@@ -66,6 +66,7 @@ const DocumentProcessor: React.FC = () => {
   const [processing, setProcessing] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<number[]>([]);
   const [filterTag, setFilterTag] = useState<string | null>(null);
   const [generateTitles, setGenerateTitles] = useState(true);
   const [generateTags, setGenerateTags] = useState(true);
@@ -88,6 +89,7 @@ const DocumentProcessor: React.FC = () => {
       setFilterTag(filterTagRes.data.tag);
       setAllCustomFields(customFieldsRes.data || []);
       setDocuments(documentsRes.data);
+      setSelectedDocumentIds(documentsRes.data.map((d) => d.id));
       const tags = Object.keys(tagsRes.data).map((tag) => ({
         id: tag,
         name: tag,
@@ -105,12 +107,18 @@ const DocumentProcessor: React.FC = () => {
     fetchInitialData();
   }, [fetchInitialData]);
 
+  const handleSelectDocument = (id: number) => {
+    setSelectedDocumentIds((prev) =>
+      prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]
+    );
+  };
+
   const handleProcessDocuments = async () => {
     setProcessing(true);
     setError(null);
     try {
       const requestPayload: GenerateSuggestionsRequest = {
-        documents,
+        documents: documents.filter((d) => selectedDocumentIds.includes(d.id)),
         generate_titles: generateTitles,
         generate_tags: generateTags,
         generate_correspondents: generateCorrespondents,
@@ -252,6 +260,7 @@ const DocumentProcessor: React.FC = () => {
     try {
       const { data } = await axios.get<Document[]>("./api/documents");
       setDocuments(data);
+      setSelectedDocumentIds(data.map((d) => d.id));
     } catch (err) {
       console.error("Error reloading documents:", err);
       setError("Failed to reload documents.");
@@ -305,7 +314,11 @@ const DocumentProcessor: React.FC = () => {
           processing={processing}
         />
       ) : suggestions.length === 0 ? (
-        <DocumentsToProcess documents={documents}>
+        <DocumentsToProcess
+          documents={documents}
+          selectedDocuments={selectedDocumentIds}
+          onSelectDocument={handleSelectDocument}
+        >
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-200">Documents to Process</h2>
             <div className="flex space-x-2">
