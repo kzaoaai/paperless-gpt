@@ -390,7 +390,7 @@ func TestTokenLimitInCreatedDateGeneration(t *testing.T) {
 	// Call getSuggestedCreatedDate
 	ctx := context.Background()
 
-	_, err := app.getSuggestedCreatedDate(ctx, longContent, testLogger)
+	_, err := app.getSuggestedCreatedDate(ctx, longContent, "", testLogger)
 	require.NoError(t, err)
 
 	// Verify the final prompt size

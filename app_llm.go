@@ -91,11 +91,11 @@ func (app *App) getSuggestedTags(
 
 	// Get available tokens for content
 	templateData := map[string]interface{}{
-		"Language":       likelyLanguage,
-		"AvailableTags":  availableTags,
-		"OriginalTags":   originalTags,
-		"Title":          suggestedTitle,
-		"CreateNewTags":  createNewTags,
+		"Language":      likelyLanguage,
+		"AvailableTags": availableTags,
+		"OriginalTags":  originalTags,
+		"Title":         suggestedTitle,
+		"CreateNewTags": createNewTags,
 	}
 
 	availableTokens, err := getAvailableTokensForContent(tagTemplate, templateData)
@@ -319,7 +319,7 @@ func (app *App) getSuggestedTitle(ctx context.Context, content string, originalT
 }
 
 // getSuggestedCreatedDate generates a suggested createdDate for a document using the LLM
-func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, logger *logrus.Entry) (string, error) {
+func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, originalCreatedDate string, logger *logrus.Entry) (string, error) {
 	likelyLanguage := getLikelyLanguage()
 
 	templateMutex.RLock()
@@ -327,9 +327,10 @@ func (app *App) getSuggestedCreatedDate(ctx context.Context, content string, log
 
 	// Get available tokens for content
 	templateData := map[string]interface{}{
-		"Language": likelyLanguage,
-		"Content":  content,
-		"Today":    getTodayDate(), // must be in YYYY-MM-DD format
+		"Language":    likelyLanguage,
+		"Content":     content,
+		"Today":       getTodayDate(), // must be in YYYY-MM-DD format
+		"CreatedDate": originalCreatedDate,
 	}
 
 	availableTokens, err := getAvailableTokensForContent(createdDateTemplate, templateData)
@@ -607,7 +608,7 @@ func (app *App) generateDocumentSuggestions(ctx context.Context, suggestionReque
 			}
 
 			if suggestionRequest.GenerateCreatedDate {
-				suggestedCreatedDate, err = app.getSuggestedCreatedDate(ctx, content, docLogger)
+				suggestedCreatedDate, err = app.getSuggestedCreatedDate(ctx, content, doc.CreatedDate, docLogger)
 				if err != nil {
 					mu.Lock()
 					errorsList = append(errorsList, fmt.Errorf("Document %d: %v", documentID, err))
