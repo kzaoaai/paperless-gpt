@@ -6,8 +6,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	"net/http"
 	"os"
+	"paperless-gpt/internal/textsanitize"
+	"strconv"
 	"strings"
+	"time"
 
 	_ "image/jpeg"
 
@@ -18,6 +22,7 @@ import (
 	"github.com/tmc/langchaingo/llms/mistral"
 	"github.com/tmc/langchaingo/llms/ollama"
 	"github.com/tmc/langchaingo/llms/openai"
+	"paperless-gpt/sanitize"
 )
 
 // LLMProvider implements OCR using LLM vision models
@@ -29,6 +34,19 @@ type LLMProvider struct {
 	maxTokens   int
 	temperature *float64
 	ollamaTopK  *int
+}
+
+// WithPrompt returns a shallow copy of the provider with a different prompt.
+// This enables per-document prompt rendering without mutating shared state.
+func (p *LLMProvider) WithPrompt(prompt string) *LLMProvider {
+	clone := *p
+	clone.prompt = prompt
+	return &clone
+}
+
+// GetPrompt returns the current OCR prompt.
+func (p *LLMProvider) GetPrompt() string {
+	return p.prompt
 }
 
 func newLLMProvider(config Config) (*LLMProvider, error) {
@@ -110,7 +128,7 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 		}).Debug("Image dimensions")
 	}
 
-	logger.Debugf("Prompt: %s", p.prompt)
+	logger.Debugf("Prompt length: %d", len(p.prompt))
 
 	// Prepare content parts based on provider type
 	var parts []llms.ContentPart
@@ -135,7 +153,7 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 
 	parts = []llms.ContentPart{
 		contentPart,
-		llms.TextPart(p.prompt),
+		llms.TextPart(sanitize.Sanitize(p.prompt)),
 	}
 
 	var callOpts []llms.CallOption
@@ -149,20 +167,60 @@ func (p *LLMProvider) ProcessImage(ctx context.Context, imageContent []byte, pag
 		callOpts = append(callOpts, llms.WithTopK(*p.ollamaTopK))
 	}
 
-	// Convert the image to text
-	logger.Debug("Sending request to vision model")
-	completion, err := p.llm.GenerateContent(ctx, []llms.MessageContent{
-		{
-			Parts: parts,
-			Role:  llms.ChatMessageTypeHuman,
-		},
-	}, callOpts...)
-	if err != nil {
-		logger.WithError(err).Error("Failed to get response from vision model")
-		return nil, fmt.Errorf("error getting response from LLM: %w", err)
+	// Convert the image to text, retrying transient upstream errors (429/5xx)
+	// so a brief provider congestion window doesn't fail the whole document.
+	// Reuses the VISION_LLM_* retry settings that already apply to suggestion LLM calls.
+	// Defaults are deliberately higher than the suggestion path's (3 retries / 30s in
+	// getRateLimitConfig): a failed page forfeits the whole document, and there is no
+	// page-level resume, so a 100-page document dying on page 99 re-buys 99 pages on
+	// the next attempt. The sunk cost grows with document length, so OCR tolerates
+	// much longer provider hiccups before giving up.
+	maxRetries := 8
+	if v, convErr := strconv.Atoi(os.Getenv("VISION_LLM_MAX_RETRIES")); convErr == nil && v >= 0 {
+		maxRetries = v
+	}
+	backoffMax := 90 * time.Second
+	if d, parseErr := time.ParseDuration(os.Getenv("VISION_LLM_BACKOFF_MAX_WAIT")); parseErr == nil && d > 0 {
+		backoffMax = d
 	}
 
-	text := stripReasoning(completion.Choices[0].Content)
+	logger.Debug("Sending request to vision model")
+	var completion *llms.ContentResponse
+	var genErr error
+	for attempt := 0; ; attempt++ {
+		completion, genErr = p.llm.GenerateContent(ctx, []llms.MessageContent{
+			{
+				Parts: parts,
+				Role:  llms.ChatMessageTypeHuman,
+			},
+		}, callOpts...)
+		if genErr == nil {
+			break
+		}
+		msg := genErr.Error()
+		transient := strings.Contains(msg, "status code: 429") || strings.Contains(msg, "status code: 5")
+		if !transient || attempt >= maxRetries {
+			logger.WithError(genErr).Error("Failed to get response from vision model")
+			return nil, fmt.Errorf("error getting response from LLM: %w", genErr)
+		}
+		backoff := time.Duration(1<<uint(attempt)) * time.Second
+		if backoff <= 0 || backoff > backoffMax {
+			// <= 0 guards int64 overflow of the shift at high attempt counts,
+			// which would otherwise skip the backoff entirely.
+			backoff = backoffMax
+		}
+		logger.WithError(genErr).Warnf("Transient vision model error, retrying in %s (attempt %d/%d)", backoff, attempt+1, maxRetries)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+	}
+
+	text := textsanitize.StripReasoning(completion.Choices[0].Content)
+	// Some vision models wrap their whole answer in a ```markdown … ``` fence;
+	// strip it so the recognized text isn't polluted with model scaffolding.
+	text = textsanitize.StripCodeFences(text)
 	limitHit := false
 	tokenCount := -1
 
@@ -208,6 +266,44 @@ func createOpenAIClient(config Config) (llms.Model, error) {
 	)
 }
 
+// OllamaHTTPClient returns an *http.Client with headers from OLLAMA_HEADERS injected,
+// or nil if OLLAMA_HEADERS is not set.
+func OllamaHTTPClient() *http.Client {
+	raw := os.Getenv("OLLAMA_HEADERS")
+	if raw == "" {
+		return nil
+	}
+	headers := map[string]string{}
+	for _, pair := range strings.Split(raw, ",") {
+		parts := strings.SplitN(strings.TrimSpace(pair), "=", 2)
+		if len(parts) == 2 && parts[0] != "" {
+			headers[parts[0]] = parts[1]
+		}
+	}
+	if len(headers) == 0 {
+		return nil
+	}
+	return &http.Client{
+		Transport: &ollamaHeaderTransport{
+			base:    http.DefaultTransport,
+			headers: headers,
+		},
+	}
+}
+
+type ollamaHeaderTransport struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (t *ollamaHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	for k, v := range t.headers {
+		req.Header.Set(k, v)
+	}
+	return t.base.RoundTrip(req)
+}
+
 // createOllamaClient creates a new Ollama vision model client
 func createOllamaClient(config Config) (llms.Model, error) {
 	host := os.Getenv("OLLAMA_HOST")
@@ -220,6 +316,9 @@ func createOllamaClient(config Config) (llms.Model, error) {
 	}
 	if config.OllamaContextLength > 0 {
 		opts = append(opts, ollama.WithRunnerNumCtx(config.OllamaContextLength))
+	}
+	if client := OllamaHTTPClient(); client != nil {
+		opts = append(opts, ollama.WithHTTPClient(client))
 	}
 	return ollama.New(opts...)
 }

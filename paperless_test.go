@@ -9,6 +9,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -510,8 +513,13 @@ func TestUpdateDocuments_RemovingLastTag(t *testing.T) {
 	// document processing sends both the auto and manual
 	// versions of the tag to be removed. this is why you'll
 	// see the autoTag included in the RemoveTags but not in the original document.
+	//
+	// These are process globals, so restore them afterwards — leaking them
+	// makes later tests in this package depend on execution order.
+	previousManualTag, previousAutoTag := manualTag, autoTag
 	manualTag = "paperless-gpt"
 	autoTag = "paperless-gpt-auto"
+	t.Cleanup(func() { manualTag, autoTag = previousManualTag, previousAutoTag })
 
 	tests := []struct {
 		name              string
@@ -755,4 +763,541 @@ func TestDownloadDocumentAsPDF(t *testing.T) {
 	assert.Equal(t, 1, totalPages)
 
 	// Testing with splitting=true would be more complex so we'll skip that for simplicity
+}
+
+// TestDownloadDocumentAsPDF_SplitWithPageLimit verifies that when a page
+// limit is set, the split step only produces (and pdfcpu only has to work
+// through) the limited number of pages - not every page in the source PDF.
+func TestDownloadDocumentAsPDF_SplitWithPageLimit(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	documentID := 456
+
+	// tests/pdf/five-pager.pdf has 5 pages.
+	pdfFile := "tests/pdf/five-pager.pdf"
+	pdfContent, err := os.ReadFile(pdfFile)
+	require.NoError(t, err)
+
+	downloadPath := fmt.Sprintf("/api/documents/%d/download/", documentID)
+	env.setMockResponse(downloadPath, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write(pdfContent)
+	})
+
+	ctx := context.Background()
+	env.client.CacheFolder = "tests/tmp"
+	os.RemoveAll(env.client.CacheFolder)
+	defer os.RemoveAll(env.client.CacheFolder)
+
+	limitPages := 2
+	pdfPaths, _, totalPages, err := env.client.DownloadDocumentAsPDF(ctx, documentID, limitPages, true)
+	require.NoError(t, err)
+	assert.Equal(t, 5, totalPages, "the source document has 5 pages")
+	assert.Len(t, pdfPaths, limitPages, "only the page-limited count of split files should be returned")
+
+	for _, p := range pdfPaths {
+		_, err := os.Stat(p)
+		assert.NoError(t, err, "each returned split path should exist on disk")
+	}
+
+	// Confirm no split output beyond the limit was written to docDir either -
+	// this is the actual bug being guarded against: pdfcpu used to split
+	// every page up front regardless of limitPages.
+	docDir := filepath.Join(env.client.CacheFolder, fmt.Sprintf("document-%d-pdf", documentID))
+	entries, err := os.ReadDir(docDir)
+	require.NoError(t, err)
+	var splitFileCount int
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "original_") && strings.HasSuffix(e.Name(), ".pdf") {
+			splitFileCount++
+		}
+	}
+	assert.Equal(t, limitPages, splitFileCount, "no more than the page-limited count of split files should exist on disk")
+}
+
+func TestParsePaperlessValidationErrors(t *testing.T) {
+	t.Run("real-world response with created_date + one custom_field", func(t *testing.T) {
+		body := []byte(`{"created_date":["Date has wrong format. Use one of these formats instead: YYYY-MM-DD."],"custom_fields":[{},{},{},{},{},{},{},{"non_field_errors":["Date has wrong format. Use one of these formats instead: YYYY-MM-DD."]}]}`)
+		scalars, cfIdx, unrecoverable := parsePaperlessValidationErrors(body)
+		require.False(t, unrecoverable)
+		assert.True(t, scalars["created_date"], "created_date must be reported")
+		assert.Equal(t, []int{7}, cfIdx, "custom_fields[7] is the only failing entry")
+	})
+
+	t.Run("only custom_field failure", func(t *testing.T) {
+		body := []byte(`{"custom_fields":[{},{"non_field_errors":["bad"]},{}]}`)
+		scalars, cfIdx, unrecoverable := parsePaperlessValidationErrors(body)
+		require.False(t, unrecoverable)
+		assert.Empty(t, scalars)
+		assert.Equal(t, []int{1}, cfIdx)
+	})
+
+	t.Run("only scalar failure", func(t *testing.T) {
+		body := []byte(`{"title":["This field may not be blank."]}`)
+		scalars, cfIdx, unrecoverable := parsePaperlessValidationErrors(body)
+		require.False(t, unrecoverable)
+		assert.True(t, scalars["title"])
+		assert.Empty(t, cfIdx)
+	})
+
+	t.Run("tags failure is unrecoverable", func(t *testing.T) {
+		// Tag updates carry the loop-break (auto-tag removal). We must not
+		// silently drop them.
+		body := []byte(`{"tags":["Invalid pk \"99\" - object does not exist."]}`)
+		_, _, unrecoverable := parsePaperlessValidationErrors(body)
+		assert.True(t, unrecoverable, "tag errors must be classified as unrecoverable")
+	})
+
+	t.Run("garbage body returns nothing-to-strip", func(t *testing.T) {
+		scalars, cfIdx, unrecoverable := parsePaperlessValidationErrors([]byte("not json"))
+		assert.Nil(t, scalars)
+		assert.Nil(t, cfIdx)
+		assert.False(t, unrecoverable)
+	})
+
+	t.Run("empty response with no errors returns nothing-to-strip", func(t *testing.T) {
+		scalars, cfIdx, unrecoverable := parsePaperlessValidationErrors([]byte(`{}`))
+		assert.Nil(t, scalars)
+		assert.Nil(t, cfIdx)
+		assert.False(t, unrecoverable)
+	})
+}
+
+func TestStripFailedFields(t *testing.T) {
+	t.Run("strips scalar field", func(t *testing.T) {
+		uf := map[string]interface{}{
+			"title":        "BARMER letter",
+			"created_date": "2023-01-79",
+		}
+		dropped := stripFailedFields(uf, map[string]bool{"created_date": true}, nil)
+		assert.Equal(t, []string{"created_date"}, dropped)
+		_, present := uf["created_date"]
+		assert.False(t, present)
+		assert.Equal(t, "BARMER letter", uf["title"])
+	})
+
+	t.Run("strips custom_fields entries by index, preserves the rest", func(t *testing.T) {
+		uf := map[string]interface{}{
+			"custom_fields": []CustomFieldResponse{
+				{Field: 6, Value: "Adresse"},
+				{Field: 7, Value: "2023-01-79"},
+				{Field: 8, Value: "M976605823"},
+			},
+		}
+		dropped := stripFailedFields(uf, nil, []int{1})
+		require.Len(t, dropped, 1)
+		assert.Contains(t, dropped[0], "field_id=7")
+		cf := uf["custom_fields"].([]CustomFieldResponse)
+		require.Len(t, cf, 2)
+		assert.Equal(t, 6, cf[0].Field)
+		assert.Equal(t, 8, cf[1].Field, "field 8 must remain after deleting index 1")
+	})
+
+	t.Run("strips multiple custom_fields entries (descending order is safe)", func(t *testing.T) {
+		uf := map[string]interface{}{
+			"custom_fields": []CustomFieldResponse{
+				{Field: 1, Value: "a"},
+				{Field: 2, Value: "b"},
+				{Field: 3, Value: "c"},
+				{Field: 4, Value: "d"},
+			},
+		}
+		dropped := stripFailedFields(uf, nil, []int{0, 2})
+		require.Len(t, dropped, 2)
+		cf := uf["custom_fields"].([]CustomFieldResponse)
+		require.Len(t, cf, 2)
+		assert.Equal(t, 2, cf[0].Field, "field 2 must remain after deleting indices 0 and 2")
+		assert.Equal(t, 4, cf[1].Field, "field 4 must remain after deleting indices 0 and 2")
+	})
+
+	t.Run("removes custom_fields key entirely if all entries fail", func(t *testing.T) {
+		uf := map[string]interface{}{
+			"title": "Letter",
+			"custom_fields": []CustomFieldResponse{
+				{Field: 7, Value: "2023-01-79"},
+			},
+		}
+		dropped := stripFailedFields(uf, nil, []int{0})
+		require.Len(t, dropped, 1)
+		_, present := uf["custom_fields"]
+		assert.False(t, present, "custom_fields key should be removed when empty")
+		assert.Equal(t, "Letter", uf["title"])
+	})
+
+	t.Run("ignores out-of-range custom_field indices", func(t *testing.T) {
+		uf := map[string]interface{}{
+			"custom_fields": []CustomFieldResponse{{Field: 1, Value: "a"}},
+		}
+		dropped := stripFailedFields(uf, nil, []int{5})
+		assert.Empty(t, dropped)
+		cf := uf["custom_fields"].([]CustomFieldResponse)
+		assert.Len(t, cf, 1, "original entry must remain when index is out of range")
+	})
+
+	t.Run("returns empty when scalar field is not in payload", func(t *testing.T) {
+		uf := map[string]interface{}{"title": "x"}
+		dropped := stripFailedFields(uf, map[string]bool{"created_date": true}, nil)
+		assert.Empty(t, dropped, "must not report a drop for a field that was not in the payload")
+		assert.Equal(t, "x", uf["title"])
+	})
+}
+
+func TestCreatedDatePreValidation(t *testing.T) {
+	// Verify that UpdateDocuments rejects impossible dates like "2023-01-79"
+	// before sending the PATCH, so the bad date never reaches paperless-ngx.
+	// The field should appear in partialDroppedFields so the caller applies
+	// the fail tag.
+	env := setupTest(t)
+	defer env.teardown()
+
+	ctx := context.Background()
+
+	setupTestCase(TestCase{
+		name: "pre-validate created_date",
+		documents: []TestDocument{
+			{ID: 1, Title: "Test Doc", Tags: []string{autoTag}},
+		},
+	}, env)
+
+	patchCalled := false
+	var receivedPatch map[string]interface{}
+	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			json.NewEncoder(w).Encode(GetDocumentApiResponse{
+				ID: 1, Title: "Test Doc", Tags: []int{1}, Content: "content",
+			})
+			return
+		}
+		if r.Method == "PATCH" {
+			patchCalled = true
+			json.NewDecoder(r.Body).Decode(&receivedPatch)
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"id": 1, "title": "Test Doc", "tags": []int{1},
+			})
+		}
+	})
+
+	suggestion := DocumentSuggestion{
+		ID:                   1,
+		OriginalDocument:     Document{ID: 1, Title: "Test Doc", Tags: []string{autoTag}},
+		SuggestedTitle:       "Better Title",
+		SuggestedCreatedDate: "2023-01-79", // impossible date
+	}
+
+	err := env.client.UpdateDocuments(ctx, []DocumentSuggestion{suggestion}, env.db, false)
+
+	var partial *PartialUpdateError
+	require.ErrorAs(t, err, &partial, "UpdateDocuments must return PartialUpdateError when created_date is invalid")
+	assert.Contains(t, partial.DroppedFields, "created_date", "created_date must be in DroppedFields")
+	require.True(t, patchCalled, "PATCH must still be sent (with the valid fields)")
+	if created, ok := receivedPatch["created_date"]; ok {
+		t.Errorf("PATCH must not include invalid created_date, but got %v", created)
+	}
+	assert.Equal(t, "Better Title", receivedPatch["title"], "valid fields must still be sent")
+}
+
+// TestUpdateDocuments_AddTagsApplied covers the AUTO_TAG_COMPLETE handover.
+//
+// app_llm.go marks a finished auto-processed document by putting the completion
+// tag in AddTags and the trigger tags in RemoveTags. UpdateDocuments used to
+// consume only RemoveTags, so the completion tag was logged as "adding" and
+// then silently dropped — the document lost its trigger tag and never gained a
+// completion tag, which is what #1006 (and the same symptom in #854 / #811)
+// reports.
+//
+// The second case pins the collision behaviour: when a user configures the
+// completion tag to the same name as the trigger tag, the addition has to win.
+// Applying RemoveTags last would leave the document with neither tag, i.e.
+// looking untouched. See #458.
+func TestUpdateDocuments_AddTagsApplied(t *testing.T) {
+	tests := []struct {
+		name       string
+		autoTag    string // the configured AUTO_TAG for this case
+		docTags    []string
+		addTags    []string
+		removeTags []string
+		wantTagIDs []interface{}
+	}{
+		{
+			name:       "completion tag is added while the trigger tag is removed",
+			autoTag:    "paperless-gpt-auto",
+			docTags:    []string{"paperless-gpt-auto", "keepMe"},
+			addTags:    []string{"paperless-gpt-auto-complete"},
+			removeTags: []string{"paperless-gpt-auto"},
+			wantTagIDs: []interface{}{float64(20), float64(30)}, // keepMe, complete
+		},
+		{
+			// The collision case from #458: the same name in both lists must
+			// end up applied, not stripped.
+			name:       "an added tag wins over the same name in RemoveTags",
+			autoTag:    "unrelated-auto-tag",
+			docTags:    []string{"keepMe"},
+			addTags:    []string{"paperless-gpt-auto"},
+			removeTags: []string{"paperless-gpt-auto"},
+			wantTagIDs: []interface{}{float64(10), float64(20)}, // auto, keepMe
+		},
+		{
+			// The #856 path: the suggestions matched what the document already
+			// had, so no ordinary field changed and UpdateDocuments falls into
+			// its "just strip the trigger tag" branch. That branch used to
+			// ignore AddTags entirely, so the document came out with the
+			// trigger tag gone and no completion tag — indistinguishable from
+			// never having been processed.
+			name:       "completion tag is applied even when no other field changed",
+			autoTag:    "paperless-gpt-auto",
+			docTags:    []string{"paperless-gpt-auto", "keepMe"},
+			addTags:    []string{"paperless-gpt-auto-complete"},
+			removeTags: []string{"paperless-gpt-auto"},
+			wantTagIDs: []interface{}{float64(20), float64(30)}, // keepMe, complete
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			defer env.teardown()
+
+			// These are process globals; other tests in this package set them
+			// without restoring, so pin every one this code path reads.
+			previousManualTag, previousAutoTag, previousAutoOcrTag := manualTag, autoTag, autoOcrTag
+			manualTag, autoTag, autoOcrTag = "manual", tt.autoTag, "paperless-gpt-ocr-auto"
+			t.Cleanup(func() {
+				manualTag, autoTag, autoOcrTag = previousManualTag, previousAutoTag, previousAutoOcrTag
+			})
+
+			env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"results": []map[string]interface{}{
+						{"id": 10, "name": "paperless-gpt-auto"},
+						{"id": 20, "name": "keepMe"},
+						{"id": 30, "name": "paperless-gpt-auto-complete"},
+					},
+					"next": nil,
+				})
+			})
+
+			var patched map[string]interface{}
+			env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPatch {
+					_ = json.NewDecoder(r.Body).Decode(&patched)
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			})
+
+			doc := DocumentSuggestion{
+				ID:               1,
+				OriginalDocument: Document{ID: 1, Tags: tt.docTags},
+				AddTags:          tt.addTags,
+				RemoveTags:       tt.removeTags,
+			}
+			require.NoError(t, env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{doc}, env.db, false))
+
+			require.Contains(t, patched, "tags", "the tag update must be sent")
+			assert.ElementsMatch(t, tt.wantTagIDs, patched["tags"])
+		})
+	}
+}
+
+// TestUpdateDocuments_PreserveExistingMetadata verifies that PRESERVE_EXISTING_METADATA
+// keeps a correspondent and a document type that are already set, while still
+// filling in the ones that are empty. Without it, a suggestion always wins — which
+// silently overrides paperless-ngx' own classifier and any manual correction.
+func TestUpdateDocuments_PreserveExistingMetadata(t *testing.T) {
+	t.Setenv("PRESERVE_EXISTING_METADATA", "true")
+	preserveExistingMetadata = true
+	defer func() { preserveExistingMetadata = false }()
+
+	tests := []struct {
+		name              string
+		originalCorr      string
+		originalType      string
+		wantCorrUnchanged bool
+		wantTypeUnchanged bool
+	}{
+		{
+			name:              "both already set are kept",
+			originalCorr:      "Existing Corp",
+			originalType:      "Invoice",
+			wantCorrUnchanged: true,
+			wantTypeUnchanged: true,
+		},
+		{
+			name:              "empty ones are still filled",
+			originalCorr:      "",
+			originalType:      "",
+			wantCorrUnchanged: false,
+			wantTypeUnchanged: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			defer env.teardown()
+
+			var patched map[string]interface{}
+			env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"results":[]}`))
+			})
+			env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPatch {
+					_ = json.NewDecoder(r.Body).Decode(&patched)
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			})
+			env.setMockResponse("/api/correspondents/", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"results":[{"id":7,"name":"Suggested Corp"}]}`))
+			})
+			env.setMockResponse("/api/document_types/", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"results":[{"id":9,"name":"Receipt"}]}`))
+			})
+
+			doc := DocumentSuggestion{
+				ID: 1,
+				OriginalDocument: Document{
+					ID:               1,
+					Correspondent:    tt.originalCorr,
+					DocumentTypeName: tt.originalType,
+				},
+				SuggestedCorrespondent: "Suggested Corp",
+				SuggestedDocumentType:  "Receipt",
+			}
+			if err := env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{doc}, env.db, false); err != nil {
+				t.Fatalf("UpdateDocuments: %v", err)
+			}
+
+			_, corrPatched := patched["correspondent"]
+			if corrPatched == tt.wantCorrUnchanged {
+				t.Errorf("correspondent: patched=%v, want unchanged=%v", corrPatched, tt.wantCorrUnchanged)
+			}
+			_, typePatched := patched["document_type"]
+			if typePatched == tt.wantTypeUnchanged {
+				t.Errorf("document_type: patched=%v, want unchanged=%v", typePatched, tt.wantTypeUnchanged)
+			}
+		})
+	}
+}
+
+// paperless-ngx preserves the case a tag was created with, while the tag names
+// paperless-gpt acts on come from env vars typed by a user. app_llm.go already
+// compares the two with strings.EqualFold, and the RemoveTags pass in
+// UpdateDocuments does too -- but resolving a name to a tag ID is an exact map
+// index, so a case difference makes a tag that exists look missing.
+func TestUpdateDocuments_TagIDLookupIsCaseInsensitive(t *testing.T) {
+	// storedTags is what paperless-ngx holds, lowercase as created.
+	run := func(t *testing.T, allowCreate bool) (map[string]interface{}, []string) {
+		env := newTestEnv(t)
+		t.Cleanup(env.teardown)
+
+		previousManualTag, previousAutoTag, previousAutoOcrTag := manualTag, autoTag, autoOcrTag
+		manualTag, autoTag, autoOcrTag = "manual", "paperless-gpt-auto", "paperless-gpt-ocr-auto"
+		previousCreateNewTags := createNewTags
+		createNewTags = allowCreate
+		t.Cleanup(func() {
+			manualTag, autoTag, autoOcrTag = previousManualTag, previousAutoTag, previousAutoOcrTag
+			createNewTags = previousCreateNewTags
+		})
+
+		var mu sync.Mutex
+		var created []string
+		env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				var body struct {
+					Name string `json:"name"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				mu.Lock()
+				created = append(created, body.Name)
+				mu.Unlock()
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(`{"id": 99, "name": "` + body.Name + `"}`))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"results": []map[string]interface{}{
+					{"id": 10, "name": "paperless-gpt-auto"},
+					{"id": 20, "name": "keepMe"},
+					{"id": 30, "name": "paperless-gpt-auto-complete"},
+				},
+				"next": nil,
+			})
+		})
+
+		var patched map[string]interface{}
+		env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPatch {
+				_ = json.NewDecoder(r.Body).Decode(&patched)
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		})
+
+		doc := DocumentSuggestion{
+			ID:               1,
+			OriginalDocument: Document{ID: 1, Tags: []string{"paperless-gpt-auto", "keepMe"}},
+			// AUTO_TAG_COMPLETE as the user configured it: same tag, different case.
+			AddTags:    []string{"Paperless-GPT-Auto-Complete"},
+			RemoveTags: []string{"paperless-gpt-auto"},
+		}
+		require.NoError(t, env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{doc}, env.db, false))
+		mu.Lock()
+		defer mu.Unlock()
+		return patched, append([]string(nil), created...)
+	}
+
+	// Default config. The completion tag exists, so it must be applied by id.
+	// Dropping it leaves the document indistinguishable from never-processed.
+	t.Run("existing tag is matched despite differing case", func(t *testing.T) {
+		patched, created := run(t, false)
+		require.Contains(t, patched, "tags")
+		assert.ElementsMatch(t, []interface{}{float64(20), float64(30)}, patched["tags"])
+		assert.Empty(t, created, "no tag should be created; it already exists")
+	})
+
+	// With CREATE_NEW_TAGS the miss is not silent -- it mints a second tag that
+	// differs from the existing one only by case.
+	t.Run("no near-duplicate tag is created when one already exists", func(t *testing.T) {
+		_, created := run(t, true)
+		assert.Empty(t, created, "must not create a case-variant duplicate of an existing tag")
+	})
+}
+
+// A paperless-ngx database can hold tags that differ only by case, and
+// GetAllTags keys them by their exact names, so a case-insensitive lookup can
+// match more than one. Ranging the map would let Go's randomised iteration
+// order pick the id, so the same document could be PATCHed with a different
+// tag on each run.
+func TestLookupTagID_AmbiguousMatchIsDeterministic(t *testing.T) {
+	availableTags := map[string]int{
+		"Foo":       30,
+		"foo":       10,
+		"FOO":       20,
+		"unrelated": 40,
+	}
+
+	// Repeat well past the point where map iteration order would have varied.
+	for i := 0; i < 200; i++ {
+		name, id, exists := lookupTagID(availableTags, "fOo")
+		require.True(t, exists)
+		assert.Equal(t, 10, id, "must settle on the lowest id every time")
+		assert.Equal(t, "foo", name, "must report the stored spelling of the chosen tag")
+	}
+
+	// An exact hit still wins outright, even though other variants match.
+	name, id, exists := lookupTagID(availableTags, "Foo")
+	require.True(t, exists)
+	assert.Equal(t, 30, id)
+	assert.Equal(t, "Foo", name)
+
+	_, _, exists = lookupTagID(availableTags, "absent")
+	assert.False(t, exists)
 }

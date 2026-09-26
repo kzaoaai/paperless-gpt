@@ -25,29 +25,23 @@ COPY web-app /app/
 RUN npm run build
 
 # Stage 2: Build the Go binary
-FROM docker.io/golang:1.25.5-alpine3.21 AS builder
+FROM docker.io/golang:1.27.1-alpine3.24 AS builder
 
 # Set the working directory inside the container
 WORKDIR /app
 
 # Package versions for Renovate
-# renovate: datasource=repology depName=alpine_3_21/gcc versioning=loose
-ENV GCC_VERSION="14.2.0-r4"
-# renovate: datasource=repology depName=alpine_3_21/musl-dev versioning=loose
-ENV MUSL_DEV_VERSION="1.2.5-r11"
-# renovate: datasource=repology depName=alpine_3_21/mupdf versioning=loose
-ENV MUPDF_VERSION="1.24.10-r0"
-# renovate: datasource=repology depName=alpine_3_21/mupdf-dev versioning=loose
-ENV MUPDF_DEV_VERSION="1.24.10-r0"
-# renovate: datasource=repology depName=alpine_3_21/sed versioning=loose
+# renovate: datasource=repology depName=alpine_3_24/gcc versioning=loose
+ENV GCC_VERSION="15.2.0-r5"
+# renovate: datasource=repology depName=alpine_3_24/musl-dev versioning=loose
+ENV MUSL_DEV_VERSION="1.2.6-r2"
+# renovate: datasource=repology depName=alpine_3_24/sed versioning=loose
 ENV SED_VERSION="4.9-r2"
 
 # Install necessary packages with pinned versions
 RUN apk add --no-cache \
     "gcc=${GCC_VERSION}" \
     "musl-dev=${MUSL_DEV_VERSION}" \
-    "mupdf=${MUPDF_VERSION}" \
-    "mupdf-dev=${MUPDF_DEV_VERSION}" \
     "sed=${SED_VERSION}"
 
 # Copy go.mod and go.sum files
@@ -65,6 +59,8 @@ COPY --from=frontend /app/dist /app/web-app/dist
 # Copy the Go source files
 COPY *.go .
 COPY ocr ./ocr
+COPY sanitize ./sanitize
+COPY internal ./internal
 
 # Import ARGs from top level
 ARG VERSION
@@ -82,13 +78,14 @@ RUN sed -i \
 RUN CGO_ENABLED=1 GOMAXPROCS=$(nproc) go build -tags musl -o paperless-gpt .
 
 # Stage 3: Create a lightweight image with just the binary
-FROM docker.io/alpine:3.23.0
+FROM docker.io/alpine:3.24.1
 
 ENV GIN_MODE=release
 
 # Install necessary runtime dependencies
 RUN apk add --no-cache \
-    ca-certificates
+    ca-certificates \
+    su-exec
 
 # Set the working directory inside the container
 WORKDIR /app/
@@ -96,11 +93,15 @@ WORKDIR /app/
 # Copy the Go binary from the builder stage
 COPY --from=builder /app/paperless-gpt .
 
+# Copy the entrypoint script
+COPY entrypoint.sh .
+RUN chmod +x ./entrypoint.sh
+
 # Copy the prompt templates
 COPY default_prompts/ /app/default_prompts/
 
 # Expose the port the app runs on
 EXPOSE 8080
 
-# Command to run the binary
-CMD ["/app/paperless-gpt"]
+# Set the entrypoint
+ENTRYPOINT ["./entrypoint.sh"]
