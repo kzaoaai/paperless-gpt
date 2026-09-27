@@ -1,1 +1,65 @@
-AGENTS.md
+@AGENTS.md
+
+## This fork (kzaoaai/paperless-gpt)
+
+AGENTS.md above is upstream's guide, kept verbatim so upstream merges stay clean. This section
+covers only what differs in the fork and how it is deployed. Upstream ships CLAUDE.md as a
+symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep this file.
+
+### Build, test, deploy
+
+- Build the frontend before any Go build or test: the binary embeds `web-app/dist`
+  (`embedded_assets.go`). `cd web-app && npm install && npm run build`, then
+  `go vet ./... && go test ./...` from the repo root.
+- Run the whole package. `TestTokenLimitInCreatedDateGeneration` panics when run on its own
+  (it relies on a template another test sets) — an upstream test-isolation bug.
+- CI (`.github/workflows/docker-build-and-push.yml`) is the fork's own: one amd64 build that
+  pushes `ghcr.io/kzaoaai/paperless-gpt:latest` and `:<sha>` on every push to `main`, plus
+  `workflow_dispatch`. No arm64, manifest-merge or E2E jobs — AGENTS.md's CI section does not
+  apply here.
+- A push never deploys. Production runs the image as one service of a Komodo-managed compose
+  stack (UI-defined: Komodo's DB is the master copy of the compose). Deploy = change the
+  compose in Komodo if config changes, write the identical file on the host, then pull and
+  recreate only this service with `docker compose -p <project> pull paperless-gpt` and
+  `docker compose -p <project> up -d --no-deps paperless-gpt`. Never redeploy the whole stack
+  for this: it also pulls paperless-ngx, which tracks a moving tag.
+
+### Syncing upstream
+
+- `git fetch upstream && git merge upstream/main` — merge, never rebase (history is shared
+  with origin). Build and test before pushing; the push is what publishes `:latest`.
+- Re-check these fork deltas after every sync:
+  - The CI workflow above — keep the fork's single build job.
+  - `getSuggestedCreatedDate` passes the document's current created date as template key
+    `CreatedDate`. Upstream lacks it; production's custom created-date prompt depends on it,
+    and a missing map key renders as empty with no error. Guarded by
+    `TestCreatedDatePromptReceivesOriginalCreatedDate`.
+
+### Production invariants (config, not code)
+
+- `PDF_UPLOAD=false` and `PDF_REPLACE=false`. Since upstream #1005 they are live: upload goes
+  through `post_document` and creates a second document, and replace then deletes the
+  original — `uploadProcessedPDF` carries no custom fields, document type, storage path or
+  ASN, so those are lost.
+- `PUID`/`PGID` equal to the owner of the bind-mounted host dirs (1000). The entrypoint
+  `chown -R`s `/app` to PUID:PGID (default 10001), which rewrites bind-mounted host dirs.
+- Custom prompt templates are mounted over `/app/prompts` and replace `default_prompts/`, so
+  template data keys are a contract: renaming or dropping one silently blanks it.
+- `OCR_PROCESS_MODE=pdf` downloads the original file and splits it with pdfcpu, so non-PDF
+  originals (photos, `.eml`, Office files) cannot be OCR'd. paperless-ngx workflows give the
+  OCR trigger tag only to `*.pdf`; everything else goes straight to the LLM stage.
+  `OCR_MAX_RETRIES` fail-tags anything that still slips through.
+- `/app/db` (modification history and the OCR Activity sqlite) is a bind mount — keep it.
+
+### Open items
+
+- `uploadProcessedPDF` (`ocr.go`) should copy `document_type`, `custom_fields`,
+  `storage_path` and `archive_serial_number` from the original. That would make
+  `PDF_REPLACE` safe and get OCR text layers into downloaded PDFs. Good upstream PR candidate.
+- `app_llm_googleai.go` treats a Gemini candidate with no content parts as an error. For tag
+  generation on text where no existing tag fits, Gemini returns nothing, so the document is
+  fail-tagged after `AUTO_TAG_MAX_RETRIES`. Treating an empty tag answer as "no tags" would
+  avoid that. Not requested yet.
+- `pdf` mode could send non-PDF originals to one whole-document OCR call (as `whole_pdf`
+  does) instead of failing. Currently handled by the workflow routing above.
+- `gofmt -l .` lists several upstream files; leave them to upstream.
