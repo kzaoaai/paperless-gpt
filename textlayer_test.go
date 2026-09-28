@@ -13,29 +13,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPrepareTextLayerFoldsPunctuationAndCountsUnencodableWords(t *testing.T) {
+func TestUndrawableWordsCountsWordsTheFontLacks(t *testing.T) {
 	doc := &hocr.HOCR{Pages: []hocr.Page{{
 		Lines: []hocr.Line{{Words: []hocr.Word{{Text: "don’t"}, {Text: "2019–2020"}}}},
 		Areas: []hocr.Area{{
 			Paragraphs: []hocr.Paragraph{{Lines: []hocr.Line{{Words: []hocr.Word{{Text: "Café"}}}}}},
-			Words:      []hocr.Word{{Text: "الجمهورية"}},
+			Words:      []hocr.Word{{Text: "الجمهورية"}, {Text: "東京"}},
 		}},
+		Paragraphs: []hocr.Paragraph{{Words: []hocr.Word{{Text: "Привет"}}}},
 	}}}
 
-	prepared, unencodable, total := prepareTextLayer(doc)
+	undrawable, total := undrawableWords(doc)
 
-	assert.Equal(t, 4, total)
-	assert.Equal(t, 1, unencodable, "only the Arabic word is outside Latin-1 after folding")
-	assert.Equal(t, "don't", prepared.Pages[0].Lines[0].Words[0].Text)
-	assert.Equal(t, "2019-2020", prepared.Pages[0].Lines[0].Words[1].Text)
-	assert.Equal(t, "Café", prepared.Pages[0].Areas[0].Paragraphs[0].Lines[0].Words[0].Text, "Latin-1 letters are kept")
-	assert.Equal(t, "don’t", doc.Pages[0].Lines[0].Words[0].Text, "the input document is not modified")
+	assert.Equal(t, 6, total)
+	assert.Equal(t, 1, undrawable, "only the CJK word is missing from the font")
 }
 
-func TestPrepareTextLayerNil(t *testing.T) {
-	prepared, unencodable, total := prepareTextLayer(nil)
-	assert.Nil(t, prepared)
-	assert.Zero(t, unencodable)
+func TestUndrawableWordsNil(t *testing.T) {
+	undrawable, total := undrawableWords(nil)
+	assert.Zero(t, undrawable)
 	assert.Zero(t, total)
 }
 
@@ -79,16 +75,24 @@ func runVersionOCR(t *testing.T, word string) (*ProcessedDocument, []byte) {
 	return doc, uploaded
 }
 
-func TestProcessDocumentOCRSkipsSearchablePDFForArabic(t *testing.T) {
+func TestProcessDocumentOCRVersionsArabic(t *testing.T) {
 	doc, uploaded := runVersionOCR(t, "الجمهورية")
 
-	assert.Equal(t, "skipped", doc.PDFAction)
-	assert.Contains(t, doc.PDFDetail, "cannot encode")
-	assert.Nil(t, uploaded, "no version is uploaded when the layer would store mojibake")
-	assert.Contains(t, doc.Text, "الجمهورية", "the recognized text itself is untouched")
+	assert.Equal(t, "versioned", doc.PDFAction, doc.PDFDetail)
+	require.NotEmpty(t, uploaded)
+	assert.Contains(t, doc.Text, "الجمهورية")
 }
 
-func TestProcessDocumentOCRUploadsWhenPunctuationFolds(t *testing.T) {
+func TestProcessDocumentOCRSkipsSearchablePDFForUndrawableText(t *testing.T) {
+	doc, uploaded := runVersionOCR(t, "東京")
+
+	assert.Equal(t, "skipped", doc.PDFAction)
+	assert.Contains(t, doc.PDFDetail, "cannot draw")
+	assert.Nil(t, uploaded, "no version is uploaded when the layer would lose text")
+	assert.Contains(t, doc.Text, "東京", "the recognized text itself is untouched")
+}
+
+func TestProcessDocumentOCRUploadsTypographicPunctuation(t *testing.T) {
 	doc, uploaded := runVersionOCR(t, "Invoice’s")
 
 	assert.Equal(t, "versioned", doc.PDFAction, doc.PDFDetail)

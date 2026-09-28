@@ -474,24 +474,23 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 							processedDoc.PDFAction = "skipped"
 							processedDoc.PDFDetail = fmt.Sprintf("Only %d of %d pages were processed (page limit); a searchable PDF needs the whole document.", processedPageCount, totalPdfPages)
 						}
-					} else if layerDoc, unencodable, words := prepareTextLayer(hocrDoc); unencodable > 0 {
-						// The text layer can only encode Latin-1; anything else would be
-						// stored as mojibake and become the document's searchable text.
+					} else if undrawable, words := undrawableWords(hocrDoc); undrawable > 0 {
+						// A character the text-layer font cannot draw would be lost from
+						// the searchable text, and the layer fails outright past 10%.
 						docLogger.WithFields(logrus.Fields{
-							"unencodable_words": unencodable,
-							"total_words":       words,
-						}).Warn("Not generating PDF because the text layer cannot encode some of the recognized text")
+							"undrawable_words": undrawable,
+							"total_words":      words,
+						}).Warn("Not generating PDF because the text layer cannot draw some of the recognized text")
 						if options.UploadPDF {
 							processedDoc.PDFAction = "skipped"
-							processedDoc.PDFDetail = fmt.Sprintf("%d of %d words use characters the searchable-PDF text layer cannot encode (it supports Latin-1 only, so not e.g. Arabic); the document was left unchanged.", unencodable, words)
+							processedDoc.PDFDetail = fmt.Sprintf("%d of %d words use characters the searchable-PDF text layer cannot draw (its font has no CJK, for example); the document was left unchanged.", undrawable, words)
 						}
 					} else {
 						docLogger.Info("Applying OCR to PDF")
-						// Build the layer from the copy with punctuation folded to Latin-1.
-						hocrDoc := layerDoc
 
 						// Set up PDF configuration
 						pdfConfig := pdfocr.DefaultConfig()
+						pdfConfig.Font = textLayerFont
 
 						var pdfData []byte
 						var err error
