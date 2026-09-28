@@ -34,6 +34,15 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     `CreatedDate`. Upstream lacks it; production's custom created-date prompt depends on it,
     and a missing map key renders as empty with no error. Guarded by
     `TestCreatedDatePromptReceivesOriginalCreatedDate`.
+  - `PDF_UPLOAD_MODE=version` (not upstream yet): `UploadDocumentVersion` in `paperless.go`,
+    `uploadProcessedPDFAsVersion` and `versionUnconfirmedError` in `ocr.go`, `UploadMode` on
+    `OCROptions`/`OCRRun`, and the Playground/Activity wording in `web-app/src/components/ocr/`.
+    Tests: `ocr_version_upload_test.go`. Upstream edits to `uploadProcessedPDF` or
+    `ProcessDocumentOCR`'s upload switch will conflict here.
+  - `GetTaskStatus` normalizes paperless-ngx's three `/api/tasks/` reply shapes (bare object,
+    list, 3.0's paginated envelope) and statuses are compared case-insensitively. Upstream
+    still reads a flat object, which on 3.0 makes `PDF_REPLACE` delete originals early.
+    Guarded by `task_status_test.go`.
 
 ### Production invariants (config, not code)
 
@@ -53,9 +62,16 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 
 ### Open items
 
-- `uploadProcessedPDF` (`ocr.go`) should copy `document_type`, `custom_fields`,
-  `storage_path` and `archive_serial_number` from the original. That would make
-  `PDF_REPLACE` safe and get OCR text layers into downloaded PDFs. Good upstream PR candidate.
+- Upstream PR candidates: the `GetTaskStatus` fix (small, fixes data loss for any
+  `PDF_REPLACE` user on paperless-ngx 3.0) and `PDF_UPLOAD_MODE=version` (fixes the
+  limitation upstream's README describes under "PDF Upload to paperless-ngx").
+- `new` upload mode still copies no `document_type`, `custom_fields`, `storage_path` or
+  `archive_serial_number` to the new document (`uploadProcessedPDF`, `ocr.go`); `version`
+  mode avoids the problem because metadata never leaves the document.
+- In the auto-OCR loop (`background.go`), a failed searchable-PDF upload still completes the
+  run: the Document AI text is saved, the document leaves the OCR queue and the LLM stage
+  runs; only the Activity entry shows "Searchable PDF failed". Deliberate: retrying would
+  re-run Document AI and end in `paperless-gpt-failed` without LLM filling.
 - `app_llm_googleai.go` treats a Gemini candidate with no content parts as an error. For tag
   generation on text where no existing tag fits, Gemini returns nothing, so the document is
   fail-tagged after `AUTO_TAG_MAX_RETRIES`. Treating an empty tag answer as "no tags" would
