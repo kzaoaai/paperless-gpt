@@ -50,6 +50,11 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   searchable PDF becomes a new version of the same document. Never switch to `new` mode:
   it uploads a second document, and with replace it deletes the original along with its
   custom fields, document type, storage path and ASN.
+- The text layer (ocrchestra `pdfocr`) can only encode Latin-1, and paperless indexes the
+  latest version's extracted text. `prepareTextLayer` (`textlayer.go`) therefore skips the
+  searchable PDF for any document with a word outside Latin-1 after punctuation folding —
+  i.e. every Arabic document. Do not remove it until the layer handles Unicode and
+  right-to-left text (see open items).
 - paperless-ngx's OCR mode (UI Settings → OCR; its database value overrides
   `PAPERLESS_OCR_MODE`) must stay `auto`. paperless parses every new version; under `redo`
   it would re-OCR it with Tesseract and search would use that text instead of the layer.
@@ -81,4 +86,9 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   avoid that. Not requested yet.
 - `pdf` mode could send non-PDF originals to one whole-document OCR call (as `whole_pdf`
   does) instead of failing. Currently handled by the workflow routing above.
+- Unicode text layer, in progress as a fork of ocrchestra: embed a font with Arabic, draw
+  each word in its own direction (right-to-left for Arabic, left-to-right for digits and
+  Latin, bidi-reordered when mixed) and add space glyphs. A plain font swap is not enough:
+  `pdftotext -layout` (what paperless runs) returns Arabic drawn left-to-right with its
+  letters reversed, and digits drawn right-to-left reversed.
 - `gofmt -l .` lists several upstream files; leave them to upstream.
