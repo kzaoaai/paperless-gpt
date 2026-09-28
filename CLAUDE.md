@@ -46,10 +46,13 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 
 ### Production invariants (config, not code)
 
-- `PDF_UPLOAD=false` and `PDF_REPLACE=false`. Since upstream #1005 they are live: upload goes
-  through `post_document` and creates a second document, and replace then deletes the
-  original — `uploadProcessedPDF` carries no custom fields, document type, storage path or
-  ASN, so those are lost.
+- `PDF_UPLOAD=true` with `PDF_UPLOAD_MODE=version`, `PDF_REPLACE=false`: the Document AI
+  searchable PDF becomes a new version of the same document. Never switch to `new` mode:
+  it uploads a second document, and with replace it deletes the original along with its
+  custom fields, document type, storage path and ASN.
+- paperless-ngx's OCR mode (UI Settings → OCR; its database value overrides
+  `PAPERLESS_OCR_MODE`) must stay `auto`. paperless parses every new version; under `redo`
+  it would re-OCR it with Tesseract and search would use that text instead of the layer.
 - `PUID`/`PGID` equal to the owner of the bind-mounted host dirs (1000). The entrypoint
   `chown -R`s `/app` to PUID:PGID (default 10001), which rewrites bind-mounted host dirs.
 - Custom prompt templates are mounted over `/app/prompts` and replace `default_prompts/`, so
