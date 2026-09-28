@@ -212,11 +212,16 @@ func TestUploadProcessedPDFVersionModeKeepsPollingAfterTransientError(t *testing
 // hocrStubProvider stands in for Google Document AI: one recognized word per
 // page, with hOCR, so ProcessDocumentOCR builds a real searchable PDF.
 type hocrStubProvider struct {
+	word  string // recognized text per page; "Invoice" when empty
 	pages []hocr.Page
 }
 
 func (p *hocrStubProvider) ProcessImage(_ context.Context, _ []byte, pageNumber int) (*ocr.OCRResult, error) {
-	word := hocr.Word{ID: fmt.Sprintf("word_%d", pageNumber), Text: "Invoice", Confidence: 99,
+	text := p.word
+	if text == "" {
+		text = "Invoice"
+	}
+	word := hocr.Word{ID: fmt.Sprintf("word_%d", pageNumber), Text: text, Confidence: 99,
 		BBox: hocr.BoundingBox{X1: 200, Y1: 200, X2: 600, Y2: 260}}
 	p.pages = append(p.pages, hocr.Page{
 		ID:         fmt.Sprintf("page_%d", pageNumber),
@@ -225,7 +230,7 @@ func (p *hocrStubProvider) ProcessImage(_ context.Context, _ []byte, pageNumber 
 		Lines: []hocr.Line{{ID: fmt.Sprintf("line_%d", pageNumber), BBox: word.BBox,
 			Words: []hocr.Word{word}}},
 	})
-	return &ocr.OCRResult{Text: "Invoice"}, nil
+	return &ocr.OCRResult{Text: text}, nil
 }
 func (p *hocrStubProvider) IsHOCREnabled() bool       { return true }
 func (p *hocrStubProvider) GetHOCRPages() []hocr.Page { return p.pages }
