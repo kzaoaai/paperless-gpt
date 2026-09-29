@@ -16,7 +16,7 @@ import (
 // is written. The new version's change is recorded in the modification history,
 // so it can be undone like any other update.
 func (app *App) saveVersionText(ctx context.Context, documentID int, text string) error {
-	if false && strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	current, err := app.Client.GetDocument(ctx, documentID) // the latest version's content
