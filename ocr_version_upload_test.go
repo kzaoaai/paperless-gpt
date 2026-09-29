@@ -284,6 +284,14 @@ func TestProcessDocumentOCRVersionModeUploadsSearchablePDF(t *testing.T) {
 	assert.NotEqual(t, original, uploaded, "the uploaded version carries the added text layer")
 }
 
+// TestVersionWaitOutlastsABusyWorker pins the default wait for paperless-ngx to
+// import a new version: its worker can spend a minute or more on other tasks
+// (polling mail) before it starts the import, and a version confirmed after
+// the wait keeps paperless-ngx's own extraction instead of the recognized text.
+func TestVersionWaitOutlastsABusyWorker(t *testing.T) {
+	assert.GreaterOrEqual(t, time.Duration(taskPollAttempts)*taskPollInterval, 5*time.Minute)
+}
+
 func shortenTaskPolling(t *testing.T) {
 	attempts, interval := taskPollAttempts, taskPollInterval
 	taskPollAttempts, taskPollInterval = 3, time.Millisecond

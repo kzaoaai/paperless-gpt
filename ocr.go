@@ -475,16 +475,17 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 							processedDoc.PDFAction = "skipped"
 							processedDoc.PDFDetail = fmt.Sprintf("Only %d of %d pages were processed (page limit); a searchable PDF needs the whole document.", processedPageCount, totalPdfPages)
 						}
-					} else if undrawable, words := undrawableWords(hocrDoc); undrawable > 0 {
-						// A character the text-layer font cannot draw would be lost from
-						// the searchable text, and the layer fails outright past 10%.
+					} else if unencodable, words := unencodableWords(hocrDoc); unencodable > 0 {
+						// A character the text layer cannot encode would be left out of
+						// the searchable PDF (and past a tenth of a page's words the layer
+						// fails outright).
 						docLogger.WithFields(logrus.Fields{
-							"undrawable_words": undrawable,
-							"total_words":      words,
-						}).Warn("Not generating PDF because the text layer cannot draw some of the recognized text")
+							"unencodable_words": unencodable,
+							"total_words":       words,
+						}).Warn("Not generating PDF because the text layer cannot encode some of the recognized text")
 						if options.UploadPDF {
 							processedDoc.PDFAction = "skipped"
-							processedDoc.PDFDetail = fmt.Sprintf("%d of %d words use characters the searchable-PDF text layer cannot draw (its font has no CJK, for example); the document was left unchanged.", undrawable, words)
+							processedDoc.PDFDetail = fmt.Sprintf("%d of %d words use characters the searchable-PDF text layer cannot encode (beyond Unicode's Basic Multilingual Plane, such as emoji); the document was left unchanged.", unencodable, words)
 						}
 					} else {
 						docLogger.Info("Applying OCR to PDF")
@@ -838,9 +839,11 @@ func (e *versionUnconfirmedError) Error() string {
 
 func (e *versionUnconfirmedError) Unwrap() error { return e.cause }
 
-// Waiting on paperless-ngx to import a new version; tests shorten these.
+// Waiting on paperless-ngx to import a new version: up to five minutes, as its
+// worker can be busy for a minute or more (e.g. polling mail) before it starts
+// the import. Tests shorten these.
 var (
-	taskPollAttempts = 12
+	taskPollAttempts = 60
 	taskPollInterval = 5 * time.Second
 )
 

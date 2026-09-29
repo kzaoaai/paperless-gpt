@@ -65,9 +65,11 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 - The text layer is drawn with ocrchestra's `pdfocr.UnicodeFont` (`textLayerFont`,
   `textlayer.go`), from the kzaoaai/ocrchestra fork (`replace` in `go.mod`). Upstream's
   default core font encodes only Latin-1 and turns Arabic into mojibake, which paperless
-  would extract as the document's text. `undrawableWords` still skips the searchable PDF
-  for any word the font cannot draw (CJK, for example). Never drop the `replace` or the
-  font setting while upstream ocrchestra lacks the Unicode layer.
+  would extract as the document's text. `unencodableWords` still skips the searchable PDF
+  for any word with a character the layer cannot encode (beyond Unicode's Basic
+  Multilingual Plane, e.g. emoji); a character the font merely has no glyph for (CJK, Thai,
+  …) still extracts as itself and is kept. Never drop the `replace` or the font setting
+  while upstream ocrchestra lacks the Unicode layer.
 - paperless-ngx's OCR mode (UI Settings → OCR; its database value overrides
   `PAPERLESS_OCR_MODE`) must stay `auto`. paperless parses every new version; under `redo`
   it would re-OCR it with Tesseract and search would use that text instead of the layer.
@@ -99,7 +101,7 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   avoid that. Not requested yet.
 - `pdf` mode could send non-PDF originals to one whole-document OCR call (as `whole_pdf`
   does) instead of failing. Currently handled by the workflow routing above.
-- A version paperless-ngx has not confirmed within 60 s keeps paperless-ngx's own
+- A version paperless-ngx has not confirmed within 5 minutes keeps paperless-ngx's own
   `pdftotext -layout` reading of the text layer (which misplaces signs and spaces next to
   numbers in right-to-left lines), and search keeps the original's text: a manual job then
   writes no text (its run shows a warning), and the auto loop's content update may land on

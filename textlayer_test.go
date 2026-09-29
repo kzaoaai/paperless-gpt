@@ -13,25 +13,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUndrawableWordsCountsWordsTheFontLacks(t *testing.T) {
+func TestUnencodableWordsCountsWordsBeyondTheBMP(t *testing.T) {
 	doc := &hocr.HOCR{Pages: []hocr.Page{{
 		Lines: []hocr.Line{{Words: []hocr.Word{{Text: "don’t"}, {Text: "2019–2020"}}}},
 		Areas: []hocr.Area{{
 			Paragraphs: []hocr.Paragraph{{Lines: []hocr.Line{{Words: []hocr.Word{{Text: "Café"}}}}}},
-			Words:      []hocr.Word{{Text: "الجمهورية"}, {Text: "東京"}},
+			Words:      []hocr.Word{{Text: "الجمهورية"}, {Text: "東京"}, {Text: "ok😀"}},
 		}},
 		Paragraphs: []hocr.Paragraph{{Words: []hocr.Word{{Text: "Привет"}}}},
 	}}}
 
-	undrawable, total := undrawableWords(doc)
+	unencodable, total := unencodableWords(doc)
 
-	assert.Equal(t, 6, total)
-	assert.Equal(t, 1, undrawable, "only the CJK word is missing from the font")
+	assert.Equal(t, 7, total)
+	assert.Equal(t, 1, unencodable, "only the emoji cannot be encoded; CJK has no glyph but extracts")
 }
 
-func TestUndrawableWordsNil(t *testing.T) {
-	undrawable, total := undrawableWords(nil)
-	assert.Zero(t, undrawable)
+func TestUnencodableWordsNil(t *testing.T) {
+	unencodable, total := unencodableWords(nil)
+	assert.Zero(t, unencodable)
 	assert.Zero(t, total)
 }
 
@@ -83,13 +83,20 @@ func TestProcessDocumentOCRVersionsArabic(t *testing.T) {
 	assert.Contains(t, doc.Text, "الجمهورية")
 }
 
-func TestProcessDocumentOCRSkipsSearchablePDFForUndrawableText(t *testing.T) {
+func TestProcessDocumentOCRVersionsTextTheFontHasNoGlyphFor(t *testing.T) {
 	doc, uploaded := runVersionOCR(t, "東京")
 
+	assert.Equal(t, "versioned", doc.PDFAction, doc.PDFDetail)
+	assert.NotEmpty(t, uploaded)
+}
+
+func TestProcessDocumentOCRSkipsSearchablePDFForUnencodableText(t *testing.T) {
+	doc, uploaded := runVersionOCR(t, "😀")
+
 	assert.Equal(t, "skipped", doc.PDFAction)
-	assert.Contains(t, doc.PDFDetail, "cannot draw")
+	assert.Contains(t, doc.PDFDetail, "cannot encode")
 	assert.Nil(t, uploaded, "no version is uploaded when the layer would lose text")
-	assert.Contains(t, doc.Text, "東京", "the recognized text itself is untouched")
+	assert.Contains(t, doc.Text, "😀", "the recognized text itself is untouched")
 }
 
 func TestProcessDocumentOCRUploadsTypographicPunctuation(t *testing.T) {

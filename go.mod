@@ -117,4 +117,4 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
 
-replace github.com/gardar/ocrchestra => github.com/kzaoaai/ocrchestra v0.0.0-20260928152337-72b9350312c0
+replace github.com/gardar/ocrchestra => github.com/kzaoaai/ocrchestra v0.0.0-20260929104730-695778d025c9
