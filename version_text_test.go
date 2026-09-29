@@ -29,6 +29,7 @@ type versionTextEnv struct {
 	task      string
 	patchCode int
 	patches   []recordedPatch
+	uploads   int
 }
 
 func newVersionTextEnv(t *testing.T, documentID int, current string) *versionTextEnv {
@@ -53,6 +54,7 @@ func newVersionTextEnv(t *testing.T, documentID int, current string) *versionTex
 		w.Write(original)
 	})
 	e.setMockResponse(fmt.Sprintf("/api/documents/%d/update_version/", documentID), func(w http.ResponseWriter, _ *http.Request) {
+		e.uploads++
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`"task-text"`))
 	})
@@ -193,6 +195,11 @@ func TestSaveVersionTextIgnoresBlankText(t *testing.T) {
 // runAutoOCR runs the auto-OCR loop over one queued document with the given
 // content from before OCR; the stub recognizes "Test content".
 func runAutoOCR(t *testing.T, e *versionTextEnv, documentID int, before string) {
+	runAutoOCRRecognizing(t, e, documentID, before, "Test content")
+}
+
+// runAutoOCRRecognizing is runAutoOCR with the stub recognizing word.
+func runAutoOCRRecognizing(t *testing.T, e *versionTextEnv, documentID int, before, word string) {
 	t.Helper()
 	restoreTags := []string{autoTag, autoOcrTag, pdfOCRCompleteTag}
 	autoTag, autoOcrTag, pdfOCRCompleteTag = "paperless-gpt-auto", "paperless-gpt-ocr-auto", "paperless-gpt-ocr-complete"
@@ -223,7 +230,7 @@ func runAutoOCR(t *testing.T, e *versionTextEnv, documentID int, before string) 
 	})
 
 	app := &App{
-		Client: e.client, Database: e.db, ocrProvider: &hocrStubProvider{word: "Test content"},
+		Client: e.client, Database: e.db, ocrProvider: &hocrStubProvider{word: word},
 		ocrProcessMode: "pdf", pdfUpload: true, pdfUploadMode: PDFUploadModeVersion,
 	}
 	processed, err := app.processAutoOcrTagDocuments(context.Background())

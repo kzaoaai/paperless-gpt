@@ -133,3 +133,53 @@ func TestOpenStopsWhenContextIsDone(t *testing.T) {
 	assert.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second, "waiting stops with the context, not after instanceTimeout")
 }
+
+// textPDF builds a one-page (300x200 pt) PDF with text, over a one-pixel
+// image stretched across the whole page when scanned is set, as a scan with
+// an OCR layer is built.
+func textPDF(text string, scanned bool) []byte {
+	var content bytes.Buffer
+	if scanned {
+		content.WriteString("q 300 0 0 200 0 0 cm /Im1 Do Q\n")
+	}
+	fmt.Fprintf(&content, "BT /F1 12 Tf 20 100 Td (%s) Tj ET\n", text)
+	objects := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", content.Len(), content.String()),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+		"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\xffendstream",
+	}
+	var b bytes.Buffer
+	b.WriteString("%PDF-1.7\n")
+	offsets := make([]int, len(objects))
+	for i, o := range objects {
+		offsets[i] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, o)
+	}
+	xref := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objects)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&b, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	return b.Bytes()
+}
+
+func TestPageTextReportsTextAndImageCover(t *testing.T) {
+	digital := openBytes(t, textPDF("Invoice total", false))
+	text, cover, err := digital.PageText(0)
+	require.NoError(t, err)
+	assert.Contains(t, text, "Invoice total")
+	assert.Zero(t, cover)
+
+	scan := openBytes(t, textPDF("Invoice total", true))
+	text, cover, err = scan.PageText(0)
+	require.NoError(t, err)
+	assert.Contains(t, text, "Invoice total")
+	assert.InDelta(t, 1, cover, 0.01)
+
+	_, _, err = scan.PageText(1)
+	assert.Error(t, err, "out of range")
+}

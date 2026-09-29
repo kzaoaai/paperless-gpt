@@ -199,6 +199,11 @@ const ActivityTab: React.FC<ActivityTabProps> = ({ config }) => {
                       ` · ${run.total_pages} ${run.total_pages === 1 ? "page" : "pages"}`}
                     {duration && ` · ${duration}`}
                   </p>
+                  {run.pdf_action === "kept" && (
+                    <p className="mt-0.5 text-xs text-muted">
+                      Digital PDF: its own text was kept
+                    </p>
+                  )}
                   {run.pdf_action === "replaced" && (
                     <p className="mt-0.5 text-xs font-medium text-warn">
                       Original replaced with searchable PDF

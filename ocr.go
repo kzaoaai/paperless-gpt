@@ -43,7 +43,7 @@ type ProcessedDocument struct {
 	HOCR             string
 	PDFData          []byte
 	ReplacedOriginal bool   // true when the original document was successfully deleted and replaced
-	PDFAction        string // "none", "attached", "versioned", "replaced", "skipped", "failed" — what happened to the searchable PDF
+	PDFAction        string // "none", "attached", "versioned", "replaced", "kept", "skipped", "failed" — what happened to the searchable PDF
 	PDFDetail        string // human-readable reason for "skipped"/"failed"
 	VersionAdded     bool   // paperless-ngx confirmed the searchable PDF as a new version of the document
 }
@@ -474,6 +474,14 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 						if options.UploadPDF {
 							processedDoc.PDFAction = "skipped"
 							processedDoc.PDFDetail = fmt.Sprintf("Only %d of %d pages were processed (page limit); a searchable PDF needs the whole document.", processedPageCount, totalPdfPages)
+						}
+					} else if keep, coverage := keepsExistingText(ctx, docLogger, originalPDFData, processedDoc.Text); keep {
+						// A digital PDF whose own text already holds the recognized text:
+						// its text is exact, so keep it rather than layering OCR over it.
+						docLogger.WithField("coverage", coverage).Info("Not generating PDF because the PDF's own text already holds the recognized text")
+						if options.UploadPDF {
+							processedDoc.PDFAction = "kept"
+							processedDoc.PDFDetail = fmt.Sprintf("The PDF's own text already holds %.0f%% of the recognized words; a digital PDF's text is exact, so it was kept and no version was added.", coverage*100)
 						}
 					} else if unencodable, words := unencodableWords(hocrDoc); unencodable > 0 {
 						// A character the text layer cannot encode would be left out of

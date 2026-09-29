@@ -39,13 +39,18 @@ func TestUnencodableWordsNil(t *testing.T) {
 // with a stub provider recognizing word, and reports what was uploaded.
 func runVersionOCR(t *testing.T, word string) (*ProcessedDocument, []byte) {
 	t.Helper()
+	original, err := os.ReadFile("tests/pdf/sample.pdf")
+	require.NoError(t, err)
+	return runVersionOCROn(t, original, word)
+}
+
+// runVersionOCROn is runVersionOCR on the PDF original.
+func runVersionOCROn(t *testing.T, original []byte, word string) (*ProcessedDocument, []byte) {
+	t.Helper()
 	env := newTestEnv(t)
 	t.Cleanup(env.teardown)
 	require.NoError(t, env.db.AutoMigrate(&OCRPageResult{}))
 	shortenTaskPolling(t)
-
-	original, err := os.ReadFile("tests/pdf/sample.pdf")
-	require.NoError(t, err)
 
 	const documentID = 3001
 	env.setMockResponse(fmt.Sprintf("/api/documents/%d/download/", documentID), func(w http.ResponseWriter, _ *http.Request) {

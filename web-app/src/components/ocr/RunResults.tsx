@@ -266,6 +266,12 @@ const RunResults: React.FC<RunResultsProps> = ({
           A searchable PDF was added as a new version of this document during this run. {selectedRun.pdf_detail}
         </p>
       )}
+      {selectedRun.pdf_action === "kept" && (
+        <p className="mt-2 flex items-center gap-1.5 text-sm text-muted">
+          <CheckCircleIcon className="h-4 w-4" aria-hidden="true" />
+          No searchable PDF was added: {selectedRun.pdf_detail}
+        </p>
+      )}
       {selectedRun.pdf_action === "replaced" && (
         <p className="mt-2 flex items-center gap-1.5 text-sm text-pos">
           <CheckCircleIcon className="h-4 w-4" aria-hidden="true" />

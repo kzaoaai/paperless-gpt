@@ -138,6 +138,50 @@ func (d *Document) RenderDPI(index int, dpi float64) (*image.RGBA, error) {
 	return out, nil
 }
 
+// PageText returns the text of a page (0-based) and the share of the page
+// its largest image covers: close to 1 for a scanned page, whose text (if
+// any) is an OCR layer over the image. Objects inside form XObjects are not
+// looked at.
+func (d *Document) PageText(index int) (text string, imageCover float64, err error) {
+	page, err := d.page(index)
+	if err != nil {
+		return "", 0, err
+	}
+	res, err := d.instance.GetPageText(&requests.GetPageText{Page: page})
+	if err != nil {
+		return "", 0, err
+	}
+	size, err := d.instance.GetPageSize(&requests.GetPageSize{Page: page})
+	if err != nil {
+		return "", 0, err
+	}
+	pageArea := size.Width * size.Height
+	count, err := d.instance.FPDFPage_CountObjects(&requests.FPDFPage_CountObjects{Page: page})
+	if err != nil {
+		return "", 0, err
+	}
+	for i := 0; i < count.Count && pageArea > 0; i++ {
+		obj, err := d.instance.FPDFPage_GetObject(&requests.FPDFPage_GetObject{Page: page, Index: i})
+		if err != nil {
+			return "", 0, err
+		}
+		kind, err := d.instance.FPDFPageObj_GetType(&requests.FPDFPageObj_GetType{PageObject: obj.PageObject})
+		if err != nil {
+			return "", 0, err
+		}
+		if kind.Type != enums.FPDF_PAGEOBJ_IMAGE {
+			continue
+		}
+		b, err := d.instance.FPDFPageObj_GetBounds(&requests.FPDFPageObj_GetBounds{PageObject: obj.PageObject})
+		if err != nil {
+			return "", 0, err
+		}
+		area := float64(b.Right-b.Left) * float64(b.Top-b.Bottom)
+		imageCover = math.Max(imageCover, math.Min(1, area/pageArea))
+	}
+	return res.Text, imageCover, nil
+}
+
 // Close releases the document and its PDFium instance.
 func (d *Document) Close() error {
 	_, err := d.instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: d.doc})

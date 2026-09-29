@@ -51,6 +51,11 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     (`DocumentViewSet.update` → `add_or_update` without effective content). Called after a
     manual OCR job (`processJob`, `jobs.go`) and in the auto-OCR loop (`background.go`).
     Tests: `version_text_test.go`.
+  - A digital PDF whose own text already holds the recognized text keeps it: no version, and
+    the auto loop leaves its content alone (`keepsExistingText`, `existing_text.go`; PDF action
+    `kept`). "Digital" means no page is covered by an image (`pdfrender.PageText`); "holds"
+    means 90% of the recognized words, overall and in each script with 3+ words, so missing
+    Arabic cannot hide behind English. Tests: `existing_text_test.go`.
   - `go.mod` replaces `github.com/gardar/ocrchestra` with the kzaoaai/ocrchestra fork
     (branch `feat/unicode-text-layer`) for the Unicode text layer. Keep the `replace` when
     upstream moves ocrchestra; rebase the fork branch onto the new version instead. Guarded by
@@ -70,6 +75,9 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   Multilingual Plane, e.g. emoji); a character the font merely has no glyph for (CJK, Thai,
   …) still extracts as itself and is kept. Never drop the `replace` or the font setting
   while upstream ocrchestra lacks the Unicode layer.
+- `PDF_SKIP_EXISTING_OCR=true` only recognizes a text layer ocrchestra itself drew (an optional
+  content group named `OCR Text`), i.e. a document paperless-gpt already versioned; it does not
+  look at text. Digital PDFs and other tools' OCR layers are handled by the `kept` rule above.
 - paperless-ngx's OCR mode (UI Settings → OCR; its database value overrides
   `PAPERLESS_OCR_MODE`) must stay `auto`. paperless parses every new version; under `redo`
   it would re-OCR it with Tesseract and search would use that text instead of the layer.

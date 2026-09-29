@@ -44,7 +44,7 @@ export interface OCRRun {
   provider: string;
   pages_done: number;
   total_pages: number;
-  pdf_action: "none" | "attached" | "versioned" | "replaced" | "skipped" | "failed" | "";
+  pdf_action: "none" | "attached" | "versioned" | "replaced" | "kept" | "skipped" | "failed" | "";
   pdf_detail?: string;
   error?: string;
   started_at: string;

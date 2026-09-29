@@ -492,6 +492,12 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 			docLogger.Infof("Adding OCR complete tag '%s'", app.pdfOCRCompleteTag)
 		}
 
+		// A digital PDF's own text was kept: paperless-ngx's extraction of it
+		// stays the content.
+		if processedDoc.PDFAction == "kept" {
+			documentSuggestion.SuggestedContent = ""
+		}
+
 		// A new version's content is paperless-ngx's own extraction of the
 		// searchable PDF, and search reads the original's content. Write the
 		// recognized text to both; the update below then leaves content out.
