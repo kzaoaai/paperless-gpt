@@ -146,8 +146,12 @@ const ActivityTab: React.FC<ActivityTabProps> = ({ config }) => {
             const Icon = meta.icon;
             const duration = runDuration(run);
             const isExpanded = expanded.has(run.id);
+            // A versioned run has a detail only when something went wrong
+            // afterwards (e.g. the recognized text was not written to it).
             const pdfDetail =
-              (run.pdf_action === "skipped" || run.pdf_action === "failed") &&
+              (run.pdf_action === "skipped" ||
+                run.pdf_action === "failed" ||
+                run.pdf_action === "versioned") &&
               run.pdf_detail
                 ? run.pdf_detail
                 : null;

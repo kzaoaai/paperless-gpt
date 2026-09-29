@@ -45,6 +45,7 @@ type ProcessedDocument struct {
 	ReplacedOriginal bool   // true when the original document was successfully deleted and replaced
 	PDFAction        string // "none", "attached", "versioned", "replaced", "skipped", "failed" — what happened to the searchable PDF
 	PDFDetail        string // human-readable reason for "skipped"/"failed"
+	VersionAdded     bool   // paperless-ngx confirmed the searchable PDF as a new version of the document
 }
 
 // HOCRCapable defines an interface for OCR providers that can generate hOCR
@@ -543,6 +544,7 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 								switch {
 								case err == nil && options.UploadMode == PDFUploadModeVersion:
 									processedDoc.PDFAction = "versioned"
+									processedDoc.VersionAdded = true
 								case errors.As(err, &unconfirmedErr):
 									processedDoc.PDFAction = "versioned"
 									processedDoc.PDFDetail = fmt.Sprintf("Uploaded, but paperless-ngx had not confirmed the new version when paperless-gpt stopped waiting; check task %s in paperless-ngx.", unconfirmedErr.taskID)

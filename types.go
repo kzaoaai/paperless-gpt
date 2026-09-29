@@ -222,6 +222,7 @@ type ClientInterface interface {
 	DownloadDocumentAsPDF(ctx context.Context, documentID int, limitPages int, split bool) ([]string, []byte, int, error)
 	UploadDocument(ctx context.Context, data []byte, filename string, metadata map[string]interface{}) (string, error)
 	UploadDocumentVersion(ctx context.Context, documentID int, data []byte, filename string, versionLabel string) (string, error)
+	SetDocumentContent(ctx context.Context, documentID, versionID int, content string) error
 	GetTaskStatus(ctx context.Context, taskID string) (map[string]interface{}, error)
 	DeleteDocument(ctx context.Context, documentID int) error
 }

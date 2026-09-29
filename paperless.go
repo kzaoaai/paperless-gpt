@@ -1799,6 +1799,32 @@ func (client *PaperlessClient) UploadDocument(ctx context.Context, pdfData []byt
 // maxVersionLabelLength mirrors paperless-ngx's DocumentVersionSerializer.
 const maxVersionLabelLength = 64
 
+// SetDocumentContent sets the content of one version of a document and
+// nothing else. paperless-ngx 3.0 applies a content update of a document to
+// its latest version (versionID 0); ?version= selects another one, such as the
+// original (versionID = documentID), whose content paperless-ngx rebuilds the
+// document's search index entry from on every update.
+func (client *PaperlessClient) SetDocumentContent(ctx context.Context, documentID, versionID int, content string) error {
+	path := fmt.Sprintf("api/documents/%d/", documentID)
+	if versionID != 0 {
+		path += fmt.Sprintf("?version=%d", versionID)
+	}
+	body, err := json.Marshal(map[string]string{"content": content})
+	if err != nil {
+		return fmt.Errorf("error encoding the content of document %d: %w", documentID, err)
+	}
+	resp, err := client.Do(ctx, "PATCH", path, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("error updating the content of document %d: %w", documentID, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("error updating the content of document %d: %d, %s", documentID, resp.StatusCode, string(bodyBytes))
+	}
+	return nil
+}
+
 // UploadDocumentVersion adds data as a new version of an existing document
 // (paperless-ngx 3.0+, POST /api/documents/{id}/update_version/). The document
 // keeps its id, metadata and earlier versions; downloads serve the newest one.

@@ -492,6 +492,19 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 			docLogger.Infof("Adding OCR complete tag '%s'", app.pdfOCRCompleteTag)
 		}
 
+		// A new version's content is paperless-ngx's own extraction of the
+		// searchable PDF, and search reads the original's content. Write the
+		// recognized text to both; the update below then leaves content out.
+		// (Comparing with the content from before OCR instead would skip the
+		// content whenever the two were equal, e.g. for a document OCR'd again.)
+		if processedDoc.VersionAdded {
+			if err := app.saveVersionText(ctx, document.ID, processedDoc.Text); err != nil {
+				docLogger.WithError(err).Warn("Writing the recognized text to the new version failed")
+			} else {
+				documentSuggestion.OriginalDocument.Content = processedDoc.Text
+			}
+		}
+
 		// Skip updating the original document if it was actually replaced (deleted) during OCR.
 		// The replacement document will be processed as a new document on the next cycle.
 		if options.ReplaceOriginal && processedDoc != nil && processedDoc.ReplacedOriginal {

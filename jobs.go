@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sort"
 	"sync"
@@ -212,6 +213,17 @@ func processJob(app *App, job *Job) {
 		jobStore.updateJobStatus(job.ID, "completed", "Skipped (already processed or other reason)")
 		finishOCRRunLogged(app, job.ID, "completed", "", pagesDone, totalPages, "none", "Skipped (already processed)")
 		return
+	}
+
+	// Unlike the auto-OCR loop, a manual job saves no text to the document, so
+	// a new version would keep paperless-ngx's own extraction of the PDF.
+	if processedDoc.VersionAdded {
+		if err := app.saveVersionText(jobCtx, job.DocumentID, processedDoc.Text); err != nil {
+			logger.Errorf("Job %s: writing the recognized text to document %d failed: %v", job.ID, job.DocumentID, err)
+			processedDoc.PDFDetail = fmt.Sprintf("Added as a new version, but writing the recognized text to it failed, so paperless-ngx keeps its own extraction of the PDF: %v", err)
+		}
+	} else if processedDoc.PDFAction == "versioned" {
+		processedDoc.PDFDetail += " The recognized text was not written to it."
 	}
 
 	jobStore.updateJobStatus(job.ID, "completed", processedDoc.Text)

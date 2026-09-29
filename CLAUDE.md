@@ -43,6 +43,14 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     list, 3.0's paginated envelope) and statuses are compared case-insensitively. Upstream
     still reads a flat object, which on 3.0 makes `PDF_REPLACE` delete originals early.
     Guarded by `task_status_test.go`.
+  - Once paperless-ngx confirms a new version (`ProcessedDocument.VersionAdded`),
+    `saveVersionText` (`version_text.go`) writes the recognized text into the new version and
+    into the original, content only (`SetDocumentContent`, `paperless.go`). A new version's
+    content is paperless-ngx's own extraction of the searchable PDF, and paperless-ngx 3.0
+    rebuilds a document's search index entry from its ORIGINAL's content on every update
+    (`DocumentViewSet.update` → `add_or_update` without effective content). Called after a
+    manual OCR job (`processJob`, `jobs.go`) and in the auto-OCR loop (`background.go`).
+    Tests: `version_text_test.go`.
   - `go.mod` replaces `github.com/gardar/ocrchestra` with the kzaoaai/ocrchestra fork
     (branch `feat/unicode-text-layer`) for the Unicode text layer. Keep the `replace` when
     upstream moves ocrchestra; rebase the fork branch onto the new version instead. Guarded by
@@ -91,10 +99,11 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   avoid that. Not requested yet.
 - `pdf` mode could send non-PDF originals to one whole-document OCR call (as `whole_pdf`
   does) instead of failing. Currently handled by the workflow routing above.
-- Only the auto-OCR loop writes the Document AI text into paperless (`UpdateDocuments`,
-  which paperless 3.0 routes to the latest version). A manual OCR job from the web UI does
-  not, so after one paperless keeps its own `pdftotext -layout` reading of the text layer,
-  which mangles spacing next to numbers in right-to-left lines (a poppler limitation).
+- A version paperless-ngx has not confirmed within 60 s keeps paperless-ngx's own
+  `pdftotext -layout` reading of the text layer (which misplaces signs and spaces next to
+  numbers in right-to-left lines), and search keeps the original's text: a manual job then
+  writes no text (its run shows a warning), and the auto loop's content update may land on
+  the document before the version exists.
 - ocrchestra fork (`feat/unicode-text-layer`): upstream PR candidate. It also fixes gdocai's
   inverted boxes for sideways text.
 - `gofmt -l .` lists several upstream files; leave them to upstream.
