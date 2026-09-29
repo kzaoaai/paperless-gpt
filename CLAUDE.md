@@ -90,6 +90,13 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   OCR trigger tag only to `*.pdf`; everything else goes straight to the LLM stage.
   `OCR_MAX_RETRIES` fail-tags anything that still slips through.
 - `/app/db` (modification history and the OCR Activity sqlite) is a bind mount — keep it.
+- The `AI` custom field is set by a paperless-ngx workflow ("paperless-gpt: mark AI, drop the
+  completion tag": on Document Updated with `AUTO_TAG_COMPLETE`, set `AI` = true, remove the
+  tag), not by the LLM. Keep `AI` out of the custom-field prompt and the selected fields, and
+  keep `AUTO_TAG_COMPLETE` non-empty: the workflow triggers on it. Manual review-page runs get
+  no completion tag and so no `AI`, by choice.
+- `MANUAL_TAG` equals `AUTO_TAG` on purpose: it is the only tag left out of the LLM's tag
+  candidates, so the model can never suggest the tag that triggers the LLM stage.
 
 ### Open items
 
@@ -116,4 +123,9 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   the document before the version exists.
 - ocrchestra fork (`feat/unicode-text-layer`): upstream PR candidate. It also fixes gdocai's
   inverted boxes for sideways text.
+- Documents that get no searchable PDF today, each for its own reason: ocrchestra's `ApplyOCR`
+  (gofpdi) cannot read some xref streams ("/Columns <= 4") and fails the PDF — rewriting the
+  original with pdfcpu (xref table) before `ApplyOCR` would likely fix it; Document AI can
+  reject a single page as corrupt, which fails the whole run; documents over
+  `OCR_LIMIT_PAGES` (30) are skipped. Left as is by AA's choice.
 - `gofmt -l .` lists several upstream files; leave them to upstream.
