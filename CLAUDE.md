@@ -10,7 +10,8 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 
 - Build the frontend before any Go build or test: the binary embeds `web-app/dist`
   (`embedded_assets.go`). `cd web-app && npm install && npm run build`, then
-  `go vet ./... && go test ./...` from the repo root.
+  `go vet ./... && go test ./...` from the repo root. AGENTS.md's `cp -r dist ../` step does
+  not apply: nothing reads a root `dist/`.
 - Run the whole package. `TestTokenLimitInCreatedDateGeneration` panics when run on its own
   (it relies on a template another test sets) — an upstream test-isolation bug.
 - CI (`.github/workflows/docker-build-and-push.yml`) is the fork's own: one amd64 build that
