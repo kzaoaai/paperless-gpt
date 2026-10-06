@@ -35,15 +35,11 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     `CreatedDate`. Upstream lacks it; production's custom created-date prompt depends on it,
     and a missing map key renders as empty with no error. Guarded by
     `TestCreatedDatePromptReceivesOriginalCreatedDate`.
-  - `PDF_UPLOAD_MODE=version` (not upstream yet): `UploadDocumentVersion` in `paperless.go`,
+  - `PDF_UPLOAD_MODE=version` (upstream PR icereed/paperless-gpt#1125, open): `UploadDocumentVersion` in `paperless.go`,
     `uploadProcessedPDFAsVersion` and `versionUnconfirmedError` in `ocr.go`, `UploadMode` on
     `OCROptions`/`OCRRun`, and the Playground/Activity wording in `web-app/src/components/ocr/`.
     Tests: `ocr_version_upload_test.go`. Upstream edits to `uploadProcessedPDF` or
     `ProcessDocumentOCR`'s upload switch will conflict here.
-  - `GetTaskStatus` normalizes paperless-ngx's three `/api/tasks/` reply shapes (bare object,
-    list, 3.0's paginated envelope) and statuses are compared case-insensitively. Upstream
-    still reads a flat object, which on 3.0 makes `PDF_REPLACE` delete originals early.
-    Guarded by `task_status_test.go`.
   - Once paperless-ngx confirms a new version (`ProcessedDocument.VersionAdded`),
     `saveVersionText` (`version_text.go`) writes the recognized text into the new version and
     into the original, content only (`SetDocumentContent`, `paperless.go`). A new version's
@@ -101,9 +97,8 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 
 ### Open items
 
-- Upstream PR candidates: the `GetTaskStatus` fix (small, fixes data loss for any
-  `PDF_REPLACE` user on paperless-ngx 3.0) and `PDF_UPLOAD_MODE=version` (fixes the
-  limitation upstream's README describes under "PDF Upload to paperless-ngx").
+- `PDF_UPLOAD_MODE=version` is upstream PR icereed/paperless-gpt#1125 (open). Once it merges,
+  drop it from the sync checklist above.
 - `new` upload mode still copies no `document_type`, `custom_fields`, `storage_path` or
   `archive_serial_number` to the new document (`uploadProcessedPDF`, `ocr.go`); `version`
   mode avoids the problem because metadata never leaves the document.
