@@ -158,7 +158,7 @@ Content: {{.Content}}
 
 			// Test with the app's LLM
 			ctx := context.Background()
-			_, err = app.getSuggestedTitle(ctx, truncatedContent, "Test Title", testLogger)
+			_, err = app.getSuggestedTitle(ctx, truncatedContent, "Test Title", testLogger, nil)
 			require.NoError(t, err)
 
 			// Verify truncation
@@ -211,7 +211,7 @@ func TestTokenLimitInCorrespondentGeneration(t *testing.T) {
 	availableCorrespondents := []string{"Test Corp", "Example Inc"}
 	correspondentBlackList := []string{"Blocked Corp"}
 
-	_, err := app.getSuggestedCorrespondent(ctx, longContent, "Test Title", availableCorrespondents, correspondentBlackList)
+	_, err := app.getSuggestedCorrespondent(ctx, longContent, "Test Title", availableCorrespondents, correspondentBlackList, nil)
 	require.NoError(t, err)
 
 	// Verify the final prompt size
@@ -249,7 +249,7 @@ func TestTokenLimitInTagGeneration(t *testing.T) {
 	availableTags := []string{"test", "example"}
 	originalTags := []string{"original"}
 
-	_, err := app.getSuggestedTags(ctx, longContent, "Test Title", availableTags, originalTags, testLogger)
+	_, err := app.getSuggestedTags(ctx, longContent, "Test Title", availableTags, originalTags, testLogger, nil)
 	require.NoError(t, err)
 
 	// Verify the final prompt size
@@ -282,7 +282,7 @@ func TestCreateNewTagsFiltering(t *testing.T) {
 		mockLLM := &mockLLM{Response: "invoice, new-tag, receipt"}
 		app := &App{LLM: mockLLM}
 
-		tags, err := app.getSuggestedTags(ctx, "Some document content", "Test Invoice", availableTags, originalTags, testLogger)
+		tags, err := app.getSuggestedTags(ctx, "Some document content", "Test Invoice", availableTags, originalTags, testLogger, nil)
 		require.NoError(t, err)
 
 		assert.Contains(t, tags, "invoice")
@@ -295,7 +295,7 @@ func TestCreateNewTagsFiltering(t *testing.T) {
 		mockLLM := &mockLLM{Response: "invoice, new-tag, receipt"}
 		app := &App{LLM: mockLLM}
 
-		tags, err := app.getSuggestedTags(ctx, "Some document content", "Test Invoice", availableTags, originalTags, testLogger)
+		tags, err := app.getSuggestedTags(ctx, "Some document content", "Test Invoice", availableTags, originalTags, testLogger, nil)
 		require.NoError(t, err)
 
 		assert.Contains(t, tags, "invoice")
@@ -308,7 +308,7 @@ func TestCreateNewTagsFiltering(t *testing.T) {
 		mockLLM := &mockLLM{Response: "Invoice, NEW-TAG"}
 		app := &App{LLM: mockLLM}
 
-		tags, err := app.getSuggestedTags(ctx, "Some document content", "Test Invoice", availableTags, originalTags, testLogger)
+		tags, err := app.getSuggestedTags(ctx, "Some document content", "Test Invoice", availableTags, originalTags, testLogger, nil)
 		require.NoError(t, err)
 
 		// Existing tag should use the available tag's casing
@@ -322,7 +322,7 @@ func TestCreateNewTagsFiltering(t *testing.T) {
 		mockLLM := &mockLLM{Response: "invoice, , receipt"}
 		app := &App{LLM: mockLLM}
 
-		tags, err := app.getSuggestedTags(ctx, "Some document content", "Test Invoice", availableTags, originalTags, testLogger)
+		tags, err := app.getSuggestedTags(ctx, "Some document content", "Test Invoice", availableTags, originalTags, testLogger, nil)
 		require.NoError(t, err)
 
 		for _, tag := range tags {
@@ -355,7 +355,7 @@ func TestTokenLimitInTitleGeneration(t *testing.T) {
 	// Call getSuggestedTitle
 	ctx := context.Background()
 
-	_, err := app.getSuggestedTitle(ctx, longContent, "Original Title", testLogger)
+	_, err := app.getSuggestedTitle(ctx, longContent, "Original Title", testLogger, nil)
 	require.NoError(t, err)
 
 	// Verify the final prompt size
@@ -391,7 +391,7 @@ func TestTokenLimitInCreatedDateGeneration(t *testing.T) {
 	// Call getSuggestedCreatedDate
 	ctx := context.Background()
 
-	_, err := app.getSuggestedCreatedDate(ctx, longContent, "", testLogger)
+	_, err := app.getSuggestedCreatedDate(ctx, longContent, "", testLogger, nil)
 	require.NoError(t, err)
 
 	// Verify the final prompt size
@@ -415,7 +415,7 @@ func TestCreatedDatePromptReceivesOriginalCreatedDate(t *testing.T) {
 	mockLLM := &mockLLM{}
 	app := &App{LLM: mockLLM}
 
-	_, err := app.getSuggestedCreatedDate(context.Background(), "Invoice dated 5 May 2024", "2024-05-01", testLogger)
+	_, err := app.getSuggestedCreatedDate(context.Background(), "Invoice dated 5 May 2024", "2024-05-01", testLogger, nil)
 	require.NoError(t, err)
 
 	assert.Contains(t, mockLLM.lastPrompt, "Original: 2024-05-01")
@@ -470,6 +470,11 @@ type mockPaperlessClient struct {
 	GetAllTagsCalls           int
 	GetAllCorrespondentsCalls int
 	GetAllDocumentTypesCalls  int
+	// ReferenceMatches maps a reference to the document ids
+	// FindDocumentIDsByReference returns for it.
+	ReferenceMatches map[string][]int
+	ReferenceError   error
+	ReferenceLookups []string
 }
 
 func (m *mockPaperlessClient) GetCustomFields(ctx context.Context) ([]CustomField, error) {
@@ -497,6 +502,17 @@ func (m *mockPaperlessClient) GetDocumentThumbnail(ctx context.Context, document
 }
 func (m *mockPaperlessClient) SearchDocuments(ctx context.Context, query string, pageSize int) ([]Document, error) {
 	return nil, nil
+}
+func (m *mockPaperlessClient) FindDocumentIDsByReference(ctx context.Context, reference string, limit int) ([]int, error) {
+	m.ReferenceLookups = append(m.ReferenceLookups, reference)
+	if m.ReferenceError != nil {
+		return nil, m.ReferenceError
+	}
+	ids := m.ReferenceMatches[reference]
+	if len(ids) > limit {
+		ids = ids[:limit]
+	}
+	return ids, nil
 }
 func (m *mockPaperlessClient) GetDocumentPageImage(ctx context.Context, documentID int, pageIndex int) ([]byte, error) {
 	return nil, nil
@@ -595,7 +611,7 @@ func TestGetSuggestedCustomFields(t *testing.T) {
 
 	// 3. Execute
 	testLogger := logrus.WithField("test", "TestGetSuggestedCustomFields")
-	suggestions, err := app.getSuggestedCustomFields(context.Background(), doc, selectedFieldIDs, testLogger)
+	suggestions, err := app.getSuggestedCustomFields(context.Background(), doc, selectedFieldIDs, testLogger, nil)
 
 	// 4. Assert
 	require.NoError(t, err)
@@ -611,6 +627,164 @@ func TestGetSuggestedCustomFields(t *testing.T) {
 	dueDateField, ok := findFieldByID(suggestions, 2)
 	assert.True(t, ok, "Due Date (ID 2) should be in the suggestions")
 	assert.Equal(t, "2025-12-31", dueDateField.Value)
+}
+
+// TestGetSuggestedCustomFields_DocumentLink pins documentlink support.
+// paperless-ngx only accepts a list of document ids for such a field. They
+// used to reach the LLM like any other field; it filled them with a reference
+// number from the text and paperless-ngx rejected the update with "Value must
+// be a list". Now the LLM is asked for the references and paperless-gpt
+// resolves them to the ids of the documents they identify.
+func TestGetSuggestedCustomFields_DocumentLink(t *testing.T) {
+	// Other tests leave a small global tokenLimit behind; run without one.
+	t.Setenv("TOKEN_LIMIT", "")
+	resetTokenLimit()
+
+	const currentDocID = 533
+
+	tests := []struct {
+		name             string
+		llmValue         string
+		referenceMatches map[string][]int
+		referenceError   error
+		wantLinks        []int // nil: the field is not suggested at all
+	}{
+		{
+			name:             "single reference resolves to the referenced document",
+			llmValue:         `["R10927801"]`,
+			referenceMatches: map[string][]int{"R10927801": {412}},
+			wantLinks:        []int{412},
+		},
+		{
+			name:             "plain string instead of array is accepted",
+			llmValue:         `"R10927801"`,
+			referenceMatches: map[string][]int{"R10927801": {412}},
+			wantLinks:        []int{412},
+		},
+		{
+			name:             "current document is never linked to itself",
+			llmValue:         `["R10927801"]`,
+			referenceMatches: map[string][]int{"R10927801": {currentDocID, 412}},
+			wantLinks:        []int{412},
+		},
+		{
+			name:     "several references are merged without duplicates",
+			llmValue: `["R10927801", "V-2026-17"]`,
+			referenceMatches: map[string][]int{
+				"R10927801": {412},
+				"V-2026-17": {412, 87},
+			},
+			wantLinks: []int{412, 87},
+		},
+		{
+			name:     "numeric reference is accepted",
+			llmValue: `[123456]`,
+			referenceMatches: map[string][]int{
+				"123456": {87},
+			},
+			wantLinks: []int{87},
+		},
+		{
+			name:             "reference that only matches the current document is dropped",
+			llmValue:         `["R10927801"]`,
+			referenceMatches: map[string][]int{"R10927801": {currentDocID}},
+		},
+		{
+			name:             "reference matching too many documents is too generic",
+			llmValue:         `["0002058"]`,
+			referenceMatches: map[string][]int{"0002058": {1, 2, 3, 4, 5, 6}},
+		},
+		{
+			name:             "too short reference is not looked up",
+			llmValue:         `["12"]`,
+			referenceMatches: map[string][]int{"12": {412}},
+		},
+		{
+			name:           "lookup error drops the reference instead of failing",
+			llmValue:       `["R10927801"]`,
+			referenceError: fmt.Errorf("paperless-ngx unavailable"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			llm := &mockLLM{Response: `[
+				{"field": "Invoice Number", "value": "INV-12345"},
+				{"field": "Reference", "value": ` + tt.llmValue + `}
+			]`}
+			client := &mockPaperlessClient{
+				CustomFields: []CustomField{
+					{ID: 1, Name: "Invoice Number", DataType: "string"},
+					{ID: 2, Name: "Reference", DataType: "documentlink"},
+				},
+				ReferenceMatches: tt.referenceMatches,
+				ReferenceError:   tt.referenceError,
+			}
+			app := &App{LLM: llm, Client: client}
+
+			err := os.MkdirAll("prompts", 0755)
+			require.NoError(t, err)
+			err = os.WriteFile("prompts/custom_field_prompt.tmpl", []byte("{{ .CustomFieldsXML }}"), 0644)
+			require.NoError(t, err)
+			defer os.RemoveAll("prompts")
+			require.NoError(t, loadTemplates())
+
+			doc := Document{ID: currentDocID, Content: "Mahnung zu Rechnung R10927801"}
+			suggestions, err := app.getSuggestedCustomFields(context.Background(), doc, []int{1, 2}, logrus.WithField("test", t.Name()), nil)
+			require.NoError(t, err)
+
+			assert.Contains(t, llm.lastPrompt, `<field name="Reference" type="documentlink">`)
+			assert.Contains(t, llm.lastPrompt, "<description>", "documentlink fields must tell the LLM to return references")
+
+			invoiceField, ok := findFieldByID(suggestions, 1)
+			require.True(t, ok, "other fields must not be affected")
+			assert.Equal(t, "INV-12345", invoiceField.Value)
+
+			linkField, ok := findFieldByID(suggestions, 2)
+			if tt.wantLinks == nil {
+				assert.False(t, ok, "unresolved references must not be suggested, got %v", linkField.Value)
+				return
+			}
+			require.True(t, ok)
+			assert.Equal(t, tt.wantLinks, linkField.Value)
+		})
+	}
+}
+
+// TestGetSuggestedCustomFields_OnlySelectedFields checks that the LLM cannot
+// fill a custom field the user did not select, even if it returns one.
+func TestGetSuggestedCustomFields_OnlySelectedFields(t *testing.T) {
+	// Other tests leave a small global tokenLimit behind; run without one.
+	t.Setenv("TOKEN_LIMIT", "")
+	resetTokenLimit()
+
+	llm := &mockLLM{Response: `[
+		{"field": "Invoice Number", "value": "INV-12345"},
+		{"field": "Amount", "value": "12.50"}
+	]`}
+	app := &App{
+		LLM: llm,
+		Client: &mockPaperlessClient{
+			CustomFields: []CustomField{
+				{ID: 1, Name: "Invoice Number", DataType: "string"},
+				{ID: 3, Name: "Amount", DataType: "float"},
+			},
+		},
+	}
+
+	err := os.MkdirAll("prompts", 0755)
+	require.NoError(t, err)
+	err = os.WriteFile("prompts/custom_field_prompt.tmpl", []byte("{{ .CustomFieldsXML }}"), 0644)
+	require.NoError(t, err)
+	defer os.RemoveAll("prompts")
+	require.NoError(t, loadTemplates())
+
+	suggestions, err := app.getSuggestedCustomFields(context.Background(), Document{Content: "x"}, []int{1}, logrus.WithField("test", t.Name()), nil)
+	require.NoError(t, err)
+
+	assert.NotContains(t, llm.lastPrompt, `name="Amount"`, "unselected fields must not be sent to the LLM")
+	require.Len(t, suggestions, 1)
+	assert.Equal(t, 1, suggestions[0].ID)
 }
 
 // Helper function to find a custom field by ID in a slice
@@ -662,6 +836,12 @@ func TestGetSuggestedTags_SystemTagsNeverSuggested(t *testing.T) {
 			failTag, autoTagComplete, pdfOCRCompleteTag = "paperless-gpt-failed", "paperless-gpt-auto-complete", "paperless-gpt-ocr-complete"
 			previousCreateNewTags := createNewTags
 			createNewTags = createNew
+			isolateWorkflowSettings(t)
+			useWorkflows(t, []WorkflowConfig{{
+				ID:            "inv",
+				TriggerTag:    "paperless-gpt-invoices",
+				CompletionTag: "paperless-gpt-invoices-done",
+			}}...)
 			t.Cleanup(func() {
 				manualTag, autoTag, autoOcrTag = previous.manual, previous.auto, previous.ocrAuto
 				failTag, autoTagComplete, pdfOCRCompleteTag = previous.fail, previous.complete, previous.ocrComplete
@@ -672,25 +852,28 @@ func TestGetSuggestedTags_SystemTagsNeverSuggested(t *testing.T) {
 			tagTemplate = template.Must(template.New("tag").Parse(testTagTemplate))
 			t.Cleanup(func() { tagTemplate = previousTemplate })
 
+			excluded := append([]string{}, systemTagNames...)
+			excluded = append(excluded, "paperless-gpt-invoices", "paperless-gpt-invoices-done")
+
 			// The model echoes back every system tag plus one real one — the
 			// worst case, and what actually happens when the system tags are
 			// visible in the prompt.
-			mockLLM := &mockLLM{Response: strings.Join(append(systemTagNames, "Invoice"), ",")}
+			mockLLM := &mockLLM{Response: strings.Join(append(excluded, "Invoice"), ",")}
 			app := &App{LLM: mockLLM}
 
 			// Available tags as paperless-ngx would report them: real tags and
 			// paperless-gpt's own, since they all live in the same namespace.
-			availableTags := append([]string{"Invoice", "Insurance"}, systemTagNames...)
+			availableTags := append([]string{"Invoice", "Insurance"}, excluded...)
 			// The document carries the trigger tag it is being processed under.
 			originalTags := []string{"Insurance", "paperless-gpt-auto"}
 
 			suggested, err := app.getSuggestedTags(
 				context.Background(), "Some document content", "A Title",
-				availableTags, originalTags, logrus.WithField("test", "system-tags"),
+				availableTags, originalTags, logrus.WithField("test", "system-tags"), nil,
 			)
 			require.NoError(t, err)
 
-			for _, systemTag := range systemTagNames {
+			for _, systemTag := range excluded {
 				assert.NotContains(t, suggested, systemTag,
 					"system tag %q must never be suggested", systemTag)
 			}
@@ -699,10 +882,51 @@ func TestGetSuggestedTags_SystemTagsNeverSuggested(t *testing.T) {
 			assert.Contains(t, suggested, "Insurance")
 
 			// And they must not have been offered to the model either.
-			for _, systemTag := range systemTagNames {
+			for _, systemTag := range excluded {
 				assert.NotContains(t, mockLLM.lastPrompt, systemTag,
 					"system tag %q must not appear in the prompt", systemTag)
 			}
+		})
+	}
+}
+
+func TestHandoverTags(t *testing.T) {
+	previousManualTag, previousAutoTag := manualTag, autoTag
+	manualTag, autoTag = "paperless-gpt", "paperless-gpt-auto"
+	t.Cleanup(func() { manualTag, autoTag = previousManualTag, previousAutoTag })
+
+	invoices := &WorkflowConfig{ID: "wf1", TriggerTag: "invoices", CompletionTag: "invoices-done"}
+	noCompletion := &WorkflowConfig{ID: "wf2", TriggerTag: "contracts"}
+
+	tests := []struct {
+		name       string
+		complete   string
+		auto       bool
+		trigger    string
+		workflow   *WorkflowConfig
+		wantRemove []string
+		wantAdd    []string
+	}{
+		{"manual review adds no completion tag", "done", false, "", nil,
+			[]string{"paperless-gpt", "paperless-gpt-auto"}, nil},
+		{"default path adds AUTO_TAG_COMPLETE", "done", true, "paperless-gpt-auto", nil,
+			[]string{"paperless-gpt", "paperless-gpt-auto"}, []string{"done"}},
+		{"workflow completion tag replaces AUTO_TAG_COMPLETE", "done", true, "invoices", invoices,
+			[]string{"paperless-gpt", "paperless-gpt-auto", "invoices"}, []string{"invoices-done"}},
+		{"workflow without completion tag falls back to AUTO_TAG_COMPLETE", "done", true, "contracts", noCompletion,
+			[]string{"paperless-gpt", "paperless-gpt-auto", "contracts"}, []string{"done"}},
+		{"no completion tag configured anywhere", "", true, "contracts", noCompletion,
+			[]string{"paperless-gpt", "paperless-gpt-auto", "contracts"}, nil},
+		{"trigger equal to AUTO_TAG is not listed twice", "", true, "Paperless-GPT-Auto", nil,
+			[]string{"paperless-gpt", "paperless-gpt-auto"}, nil},
+		{"the polled tag comes off, whatever the workflow says", "", true, "routed-tag", invoices,
+			[]string{"paperless-gpt", "paperless-gpt-auto", "routed-tag"}, []string{"invoices-done"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			remove, add := handoverTags(tt.complete, tt.auto, tt.trigger, tt.workflow)
+			assert.Equal(t, tt.wantRemove, remove)
+			assert.Equal(t, tt.wantAdd, add)
 		})
 	}
 }

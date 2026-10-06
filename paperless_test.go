@@ -305,6 +305,7 @@ func TestGetDocumentsByTag(t *testing.T) {
 			Title:         "Document 1",
 			Content:       "Content 1",
 			Tags:          []string{"tag1", "tag2"},
+			TagIDs:        []int{1, 2},
 			Correspondent: "Alpha",
 			CreatedDate:   "1999-09-01",
 		},
@@ -313,6 +314,7 @@ func TestGetDocumentsByTag(t *testing.T) {
 			Title:         "Document 2",
 			Content:       "Content 2",
 			Tags:          []string{"tag2", "tag3"},
+			TagIDs:        []int{2, 3},
 			Correspondent: "Beta",
 			CreatedDate:   "1999-09-02",
 		},
@@ -390,6 +392,7 @@ func TestGetDocumentsByTagWithEmoji(t *testing.T) {
 			Title:         "AI Document",
 			Content:       "Content about AI",
 			Tags:          []string{"🤖 AI-Queue"},
+			TagIDs:        []int{1},
 			Correspondent: "Alpha",
 			CreatedDate:   "2024-01-01",
 		},
@@ -946,8 +949,9 @@ func TestStripFailedFields(t *testing.T) {
 func TestCreatedDatePreValidation(t *testing.T) {
 	// Verify that UpdateDocuments rejects impossible dates like "2023-01-79"
 	// before sending the PATCH, so the bad date never reaches paperless-ngx.
-	// The field should appear in partialDroppedFields so the caller applies
-	// the fail tag.
+	// A locally-skipped invalid date is deterministic — the model will answer
+	// the same way on every retry — so it is treated like an empty suggestion
+	// rather than a rejected field: no PartialUpdateError, no fail tag.
 	env := setupTest(t)
 	defer env.teardown()
 
@@ -988,14 +992,136 @@ func TestCreatedDatePreValidation(t *testing.T) {
 
 	err := env.client.UpdateDocuments(ctx, []DocumentSuggestion{suggestion}, env.db, false)
 
-	var partial *PartialUpdateError
-	require.ErrorAs(t, err, &partial, "UpdateDocuments must return PartialUpdateError when created_date is invalid")
-	assert.Contains(t, partial.DroppedFields, "created_date", "created_date must be in DroppedFields")
+	require.NoError(t, err, "a locally-skipped invalid created_date must not produce a PartialUpdateError")
 	require.True(t, patchCalled, "PATCH must still be sent (with the valid fields)")
 	if created, ok := receivedPatch["created_date"]; ok {
 		t.Errorf("PATCH must not include invalid created_date, but got %v", created)
 	}
 	assert.Equal(t, "Better Title", receivedPatch["title"], "valid fields must still be sent")
+}
+
+// TestUpdateDocuments_PreservesInvisibleTags verifies that tag IDs the API
+// user cannot resolve to a name (e.g. tags owned by another paperless-ngx
+// user when a scoped-down token is used) survive a tag update. They used to
+// be silently dropped: the PATCH rewrote the document's tag list from the
+// resolvable names only, wiping every invisible tag off the document.
+func TestUpdateDocuments_PreservesInvisibleTags(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	ctx := context.Background()
+
+	// The API user can only see tag IDs 1 (autoTag) and 3 ("other-tag").
+	// Tag ID 99 exists on the document but is invisible to the API user.
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"results": []map[string]interface{}{
+				{"id": 1, "name": autoTag},
+				{"id": 3, "name": "other-tag"},
+			},
+			"next": nil,
+		})
+	})
+
+	var receivedPatch map[string]interface{}
+	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			json.NewEncoder(w).Encode(GetDocumentApiResponse{
+				ID: 1, Title: "Test Doc", Tags: []int{1, 99}, Content: "content",
+			})
+			return
+		}
+		if r.Method == "PATCH" {
+			json.NewDecoder(r.Body).Decode(&receivedPatch)
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"id": 1, "title": "Test Doc", "tags": []int{3, 99},
+			})
+		}
+	})
+
+	suggestion := DocumentSuggestion{
+		ID: 1,
+		OriginalDocument: Document{
+			ID:     1,
+			Title:  "Test Doc",
+			Tags:   []string{autoTag}, // only the visible tag has a name
+			TagIDs: []int{1, 99},      // the raw IDs the server reported
+		},
+		SuggestedTags: []string{"other-tag"}, // replaces the visible tag set
+	}
+
+	err := env.client.UpdateDocuments(ctx, []DocumentSuggestion{suggestion}, env.db, false)
+	require.NoError(t, err)
+
+	rawTags, ok := receivedPatch["tags"].([]interface{})
+	require.True(t, ok, "PATCH must contain a tags array")
+	gotIDs := make([]int, 0, len(rawTags))
+	for _, raw := range rawTags {
+		gotIDs = append(gotIDs, int(raw.(float64)))
+	}
+	assert.Contains(t, gotIDs, 3, "suggested tag must be applied")
+	assert.Contains(t, gotIDs, 99, "invisible tag ID must be preserved")
+	assert.NotContains(t, gotIDs, 1, "replaced visible tag must be gone")
+}
+
+// TestUpdateDocuments_PreservesTagThatBecameVisible covers a timing edge of
+// the same fix: a tag the API user could not see when the document was
+// fetched may become visible by the time the update runs (permissions were
+// granted in between). Visibility for preservation must come from the
+// original snapshot — the absence of a resolved name — not from the tag
+// catalog fetched at update time, or such a tag would still be dropped.
+func TestUpdateDocuments_PreservesTagThatBecameVisible(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	ctx := context.Background()
+
+	// The catalog now knows tag 99, but the snapshot did not: the document's
+	// Tags carry no name for it.
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"results": []map[string]interface{}{
+				{"id": 1, "name": autoTag},
+				{"id": 3, "name": "other-tag"},
+				{"id": 99, "name": "newly-visible"},
+			},
+			"next": nil,
+		})
+	})
+
+	var receivedPatch map[string]interface{}
+	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PATCH" {
+			json.NewDecoder(r.Body).Decode(&receivedPatch)
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"id": 1})
+		}
+	})
+
+	suggestion := DocumentSuggestion{
+		ID: 1,
+		OriginalDocument: Document{
+			ID:     1,
+			Title:  "Test Doc",
+			Tags:   []string{autoTag}, // 99 had no name when the doc was fetched
+			TagIDs: []int{1, 99},
+		},
+		SuggestedTags: []string{"other-tag"},
+	}
+
+	err := env.client.UpdateDocuments(ctx, []DocumentSuggestion{suggestion}, env.db, false)
+	require.NoError(t, err)
+
+	rawTags, ok := receivedPatch["tags"].([]interface{})
+	require.True(t, ok, "PATCH must contain a tags array")
+	gotIDs := make([]int, 0, len(rawTags))
+	for _, raw := range rawTags {
+		gotIDs = append(gotIDs, int(raw.(float64)))
+	}
+	assert.Contains(t, gotIDs, 99, "tag that had no name in the snapshot must be preserved")
+	assert.Contains(t, gotIDs, 3, "suggested tag must be applied")
+	assert.NotContains(t, gotIDs, 1, "replaced visible tag must be gone")
 }
 
 // TestUpdateDocuments_AddTagsApplied covers the AUTO_TAG_COMPLETE handover.
@@ -1016,6 +1142,7 @@ func TestUpdateDocuments_AddTagsApplied(t *testing.T) {
 		name       string
 		autoTag    string // the configured AUTO_TAG for this case
 		docTags    []string
+		docTagIDs  []int // raw IDs the server reported; may exceed docTags
 		addTags    []string
 		removeTags []string
 		wantTagIDs []interface{}
@@ -1048,9 +1175,27 @@ func TestUpdateDocuments_AddTagsApplied(t *testing.T) {
 			name:       "completion tag is applied even when no other field changed",
 			autoTag:    "paperless-gpt-auto",
 			docTags:    []string{"paperless-gpt-auto", "keepMe"},
+			docTagIDs:  []int{10, 20, 99}, // 99 is invisible to the API user
 			addTags:    []string{"paperless-gpt-auto-complete"},
 			removeTags: []string{"paperless-gpt-auto"},
-			wantTagIDs: []interface{}{float64(20), float64(30)}, // keepMe, complete
+			wantTagIDs: []interface{}{float64(20), float64(30), float64(99)}, // keepMe, complete, invisible
+		},
+		{
+			// A workflow's trigger tag is none of the global trigger tags;
+			// UpdateDocuments only learns about it through RemoveTags.
+			name:       "a workflow trigger tag is removed and its completion tag added",
+			autoTag:    "paperless-gpt-auto",
+			docTags:    []string{"invoices", "keepMe"},
+			addTags:    []string{"invoices-done"},
+			removeTags: []string{"invoices"},
+			wantTagIDs: []interface{}{float64(20), float64(50)}, // keepMe, invoices-done
+		},
+		{
+			name:       "a workflow trigger tag is removed case-insensitively",
+			autoTag:    "paperless-gpt-auto",
+			docTags:    []string{"invoices", "keepMe"},
+			removeTags: []string{"Invoices"},
+			wantTagIDs: []interface{}{float64(20)}, // keepMe
 		},
 	}
 
@@ -1074,6 +1219,8 @@ func TestUpdateDocuments_AddTagsApplied(t *testing.T) {
 						{"id": 10, "name": "paperless-gpt-auto"},
 						{"id": 20, "name": "keepMe"},
 						{"id": 30, "name": "paperless-gpt-auto-complete"},
+						{"id": 40, "name": "invoices"},
+						{"id": 50, "name": "invoices-done"},
 					},
 					"next": nil,
 				})
@@ -1090,7 +1237,7 @@ func TestUpdateDocuments_AddTagsApplied(t *testing.T) {
 
 			doc := DocumentSuggestion{
 				ID:               1,
-				OriginalDocument: Document{ID: 1, Tags: tt.docTags},
+				OriginalDocument: Document{ID: 1, Tags: tt.docTags, TagIDs: tt.docTagIDs},
 				AddTags:          tt.addTags,
 				RemoveTags:       tt.removeTags,
 			}
@@ -1100,6 +1247,131 @@ func TestUpdateDocuments_AddTagsApplied(t *testing.T) {
 			assert.ElementsMatch(t, tt.wantTagIDs, patched["tags"])
 		})
 	}
+}
+
+// TestUpdateDocuments_CleanupPatchPreservesInvisibleTags covers the separate
+// tag-removal PATCH: when a tag change leaves no tags to send in the main
+// update, UpdateDocuments re-fetches the document and PATCHes away only the
+// workflow tags. A tag the API user cannot see has no resolvable name and
+// used to be dropped by that name-driven rebuild — it must survive by ID.
+func TestUpdateDocuments_CleanupPatchPreservesInvisibleTags(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	previousManualTag, previousAutoTag, previousAutoOcrTag := manualTag, autoTag, autoOcrTag
+	manualTag, autoTag, autoOcrTag = "manual", "paperless-gpt-auto", "paperless-gpt-ocr-auto"
+	t.Cleanup(func() {
+		manualTag, autoTag, autoOcrTag = previousManualTag, previousAutoTag, previousAutoOcrTag
+	})
+
+	// Only the workflow tag is visible to the API user. Tag 99 sits on the
+	// document (and is still there when the cleanup PATCH re-fetches it) but
+	// resolves to no name.
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"results": []map[string]interface{}{
+				{"id": 10, "name": "paperless-gpt-auto"},
+			},
+			"next": nil,
+		})
+	})
+
+	var patches []map[string]interface{}
+	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(GetDocumentApiResponse{
+				ID: 1, Title: "Test Doc", Tags: []int{10, 99},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			patches = append(patches, body)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	doc := DocumentSuggestion{
+		ID:               1,
+		OriginalDocument: Document{ID: 1, Tags: []string{"paperless-gpt-auto"}, TagIDs: []int{10}},
+		SuggestedTitle:   "New Title", // keeps the main PATCH non-empty so tags defer to the cleanup PATCH
+		RemoveTags:       []string{"paperless-gpt-auto"},
+	}
+	require.NoError(t, env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{doc}, env.db, false))
+
+	var tagPatch map[string]interface{}
+	for _, p := range patches {
+		if _, hasTags := p["tags"]; hasTags {
+			tagPatch = p
+		}
+	}
+	require.NotNil(t, tagPatch, "the cleanup tag PATCH must be sent")
+	assert.ElementsMatch(t, []interface{}{float64(99)}, tagPatch["tags"],
+		"cleanup PATCH must keep the invisible tag and drop only the workflow tag")
+}
+
+// TestUpdateDocuments_CleanupPatchRemovesWorkflowTrigger covers the same
+// cleanup PATCH for a workflow's trigger tag, which only reaches
+// UpdateDocuments through RemoveTags. The cleanup used to strip just the
+// global trigger tags, so the workflow trigger stayed on the document and it
+// was processed again on the next poll.
+func TestUpdateDocuments_CleanupPatchRemovesWorkflowTrigger(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	previousManualTag, previousAutoTag, previousAutoOcrTag := manualTag, autoTag, autoOcrTag
+	manualTag, autoTag, autoOcrTag = "manual", "paperless-gpt-auto", "paperless-gpt-ocr-auto"
+	t.Cleanup(func() {
+		manualTag, autoTag, autoOcrTag = previousManualTag, previousAutoTag, previousAutoOcrTag
+	})
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"results": []map[string]interface{}{
+				{"id": 40, "name": "invoices"},
+			},
+			"next": nil,
+		})
+	})
+
+	var patches []map[string]interface{}
+	env.setMockResponse("/api/documents/1/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(GetDocumentApiResponse{
+				ID: 1, Title: "Test Doc", Tags: []int{40, 99},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			patches = append(patches, body)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	doc := DocumentSuggestion{
+		ID:               1,
+		OriginalDocument: Document{ID: 1, Tags: []string{"invoices"}, TagIDs: []int{40}},
+		SuggestedTitle:   "New Title",
+		RemoveTags:       []string{"invoices"},
+	}
+	require.NoError(t, env.client.UpdateDocuments(context.Background(), []DocumentSuggestion{doc}, env.db, false))
+
+	var tagPatch map[string]interface{}
+	for _, p := range patches {
+		if _, hasTags := p["tags"]; hasTags {
+			tagPatch = p
+		}
+	}
+	require.NotNil(t, tagPatch, "the cleanup tag PATCH must be sent")
+	assert.ElementsMatch(t, []interface{}{float64(99)}, tagPatch["tags"],
+		"cleanup PATCH must drop the workflow trigger tag")
 }
 
 // TestUpdateDocuments_PreserveExistingMetadata verifies that PRESERVE_EXISTING_METADATA
@@ -1300,4 +1572,214 @@ func TestLookupTagID_AmbiguousMatchIsDeterministic(t *testing.T) {
 
 	_, _, exists = lookupTagID(availableTags, "absent")
 	assert.False(t, exists)
+}
+
+// TestUpdateDocuments_CustomFieldsMergeUsesCurrentState verifies that append
+// and update write modes merge suggestions into the custom fields the
+// document currently has on the server, not into the suggestion's snapshot.
+// Auto-tag documents arrive via the list endpoint, which returns no custom
+// fields, so OriginalDocument.CustomFields is empty — merging against it and
+// PATCHing the result used to delete every field that was not selected for
+// processing.
+func TestUpdateDocuments_CustomFieldsMergeUsesCurrentState(t *testing.T) {
+	tests := []struct {
+		name           string
+		writeMode      string
+		serverFields   []map[string]interface{}
+		suggested      []CustomFieldSuggestion
+		wantFieldIDs   []int
+		wantFieldValue map[int]interface{}
+	}{
+		{
+			name:      "append keeps fields that were not selected",
+			writeMode: "append",
+			serverFields: []map[string]interface{}{
+				{"field": 7, "value": "Betrag"},
+				{"field": 8, "value": "2024"},
+			},
+			suggested:    []CustomFieldSuggestion{{ID: 1, Name: "Haus", Value: "Muster"}},
+			wantFieldIDs: []int{7, 8, 1},
+			wantFieldValue: map[int]interface{}{
+				7: "Betrag", // untouched, must survive
+				8: "2024",
+				1: "Muster",
+			},
+		},
+		{
+			name:      "update overwrites selected field and keeps the rest",
+			writeMode: "update",
+			serverFields: []map[string]interface{}{
+				{"field": 7, "value": "old"},
+				{"field": 8, "value": "2024"},
+			},
+			suggested:    []CustomFieldSuggestion{{ID: 7, Name: "Betrag", Value: "new"}},
+			wantFieldIDs: []int{7, 8},
+			wantFieldValue: map[int]interface{}{
+				7: "new",
+				8: "2024",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newTestEnv(t)
+			defer env.teardown()
+
+			ctx := context.Background()
+
+			env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"results": []map[string]interface{}{{"id": 1, "name": autoTag}},
+					"next":    nil,
+				})
+			})
+
+			env.setMockResponse("/api/custom_fields/", func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"results": []map[string]interface{}{
+						{"id": 1, "name": "Haus", "data_type": "string"},
+						{"id": 7, "name": "Betrag", "data_type": "string"},
+						{"id": 8, "name": "Jahr", "data_type": "string"},
+					},
+					"next": nil,
+				})
+			})
+
+			var receivedPatch map[string]interface{}
+			env.setMockResponse("/api/documents/460/", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" {
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"id":            460,
+						"title":         "Test Doc",
+						"tags":          []int{1},
+						"custom_fields": tt.serverFields,
+						"content":       "content",
+					})
+					return
+				}
+				if r.Method == "PATCH" {
+					json.NewDecoder(r.Body).Decode(&receivedPatch)
+					w.WriteHeader(http.StatusOK)
+					json.NewEncoder(w).Encode(map[string]interface{}{"id": 460})
+				}
+			})
+
+			suggestion := DocumentSuggestion{
+				ID: 460,
+				// The list endpoint never populated CustomFields, so the
+				// suggestion carries none — exactly what the auto-tag
+				// pipeline hands to UpdateDocuments.
+				OriginalDocument:      Document{ID: 460, Title: "Test Doc", Tags: []string{autoTag}},
+				SuggestedTitle:        "New Title",
+				SuggestedCustomFields: tt.suggested,
+				CustomFieldsWriteMode: tt.writeMode,
+			}
+
+			err := env.client.UpdateDocuments(ctx, []DocumentSuggestion{suggestion}, env.db, false)
+			require.NoError(t, err)
+
+			rawFields, ok := receivedPatch["custom_fields"].([]interface{})
+			require.True(t, ok, "PATCH must contain a custom_fields array")
+			gotFields := make(map[int]interface{}, len(rawFields))
+			for _, raw := range rawFields {
+				entry := raw.(map[string]interface{})
+				gotFields[int(entry["field"].(float64))] = entry["value"]
+			}
+			for _, id := range tt.wantFieldIDs {
+				assert.Contains(t, gotFields, id, "field %d must survive the update", id)
+			}
+			for id, want := range tt.wantFieldValue {
+				assert.Equal(t, want, gotFields[id], "field %d has wrong value", id)
+			}
+		})
+	}
+}
+
+// TestUpdateDocuments_CustomFieldsMergeFailsWithoutCurrentState verifies that
+// append/update modes abort the update when the document's current state
+// cannot be fetched. Falling back to the suggestion's snapshot would merge
+// against a nil or stale field list and PATCH a replacement array that
+// silently deletes fields that were never selected for processing.
+func TestUpdateDocuments_CustomFieldsMergeFailsWithoutCurrentState(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	ctx := context.Background()
+
+	env.setMockResponse("/api/tags/", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"results": []map[string]interface{}{{"id": 1, "name": autoTag}},
+			"next":    nil,
+		})
+	})
+
+	env.setMockResponse("/api/custom_fields/", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"results": []map[string]interface{}{
+				{"id": 1, "name": "Haus", "data_type": "string"},
+			},
+			"next": nil,
+		})
+	})
+
+	patchSent := false
+	env.setMockResponse("/api/documents/460/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if r.Method == "PATCH" {
+			patchSent = true
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"id": 460})
+		}
+	})
+
+	suggestion := DocumentSuggestion{
+		ID:                    460,
+		OriginalDocument:      Document{ID: 460, Title: "Test Doc", Tags: []string{autoTag}},
+		SuggestedCustomFields: []CustomFieldSuggestion{{ID: 1, Name: "Haus", Value: "Muster"}},
+		CustomFieldsWriteMode: "append",
+	}
+
+	err := env.client.UpdateDocuments(ctx, []DocumentSuggestion{suggestion}, env.db, false)
+	require.Error(t, err, "must not fall back to suggestion-time state when the current document cannot be fetched")
+	assert.Contains(t, err.Error(), "could not fetch current custom fields")
+	assert.False(t, patchSent, "no PATCH may be sent when the merge base is unknown")
+}
+
+// TestFindDocumentIDsByReference checks the request sent to paperless-ngx and
+// that the substring match of content__icontains is narrowed to whole words.
+func TestFindDocumentIDsByReference(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	env.setMockResponse("/api/documents/", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "GET", r.Method)
+		assert.Equal(t, "R123", r.URL.Query().Get("content__icontains"))
+		assert.Equal(t, "id,content", r.URL.Query().Get("fields"))
+		assert.Equal(t, "5", r.URL.Query().Get("page_size"))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"count": 4, "results": [
+			{"id": 1, "content": "Rechnung R123 vom 01.09.2026"},
+			{"id": 2, "content": "Rechnung R1234 vom 02.09.2026"},
+			{"id": 3, "content": "Mahnung zu Rechnung r123."},
+			{"id": 4, "content": "Auftrag AR123"}
+		]}`))
+	})
+
+	ids, err := env.client.FindDocumentIDsByReference(context.Background(), " R123 ", 5)
+	require.NoError(t, err)
+	assert.Equal(t, []int{1, 3}, ids)
+}
+
+func TestFindDocumentIDsByReference_EmptyReference(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.teardown()
+
+	ids, err := env.client.FindDocumentIDsByReference(context.Background(), "  ", 5)
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+	assert.Equal(t, 0, env.requestCount, "an empty reference must not query paperless-ngx")
 }

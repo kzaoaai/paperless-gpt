@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"paperless-gpt/internal/pdfrender"
 	"paperless-gpt/ocr"
 	"paperless-gpt/sanitize"
 	"path/filepath"
@@ -148,6 +149,7 @@ type App struct {
 	ocrProviderLabel   string                 // Human-readable provider description for run records ("llm (ollama/minicpm-v)")
 	ocrFailures        documentFailureTracker // Per-document OCR failure counts for the auto-OCR poll
 	suggestionFailures documentFailureTracker // Per-document suggestion failure counts for the auto-tag poll
+	WorkflowRouter     WorkflowRouter         // Maps documents to workflows; nil uses one trigger tag per workflow
 }
 
 func main() {
@@ -168,6 +170,9 @@ func main() {
 
 	// Load settings from file
 	loadSettings()
+	persistence := checkPersistence()
+	logPersistenceIssues(persistence)
+	migrateWorkflowsFromSettings(workflows)
 
 	if settings.CustomFieldsEnable && len(settings.CustomFieldsSelectedIDs) == 0 {
 		log.Warn("Custom fields are enabled, but no custom fields are selected in the settings.")
@@ -212,6 +217,14 @@ func main() {
 			log.Warnf("Failed to ensure OCR complete tag %q exists: %v. OCR will still run, but documents will not be marked as OCR-processed.", pdfOCRCompleteTag, err)
 		}
 	}
+
+	ensureWorkflowTagsExist(ctx, client.EnsureTagExists)
+	// Workflows added or changed by editing their files get their tags too.
+	workflows.OnChange(func([]WorkflowConfig) {
+		ensureCtx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		ensureWorkflowTagsExist(ensureCtx, client.EnsureTagExists)
+	})
 
 	// Initial fetch of custom fields
 	refreshCustomFieldsCache(client)
@@ -458,6 +471,19 @@ func main() {
 				log.Fatalf("Invalid OCR_MAX_RETRIES value: %q (must be a non-negative integer, 0 disables the limit)", rawOcrMaxRetries)
 			}
 		}
+
+		// Compile the PDF renderer in the background so the first OCR run or
+		// page preview after a restart doesn't pay for it. Not started when
+		// OCR is disabled: nothing renders PDFs then, and it would only cost
+		// CPU at startup and memory for the compiled module.
+		go func() {
+			start := time.Now()
+			if err := pdfrender.Warm(); err != nil {
+				log.Errorf("Preparing the PDF renderer failed: %v. PDF rendering stays unavailable until paperless-gpt is restarted.", err)
+				return
+			}
+			log.Infof("PDF renderer ready after %v", time.Since(start).Round(time.Millisecond))
+		}()
 	}
 
 	// Start Background-Tasks for Auto-Tagging and Auto-OCR (if enabled)
@@ -529,6 +555,16 @@ func main() {
 
 		// Get version information
 		api.GET("/version", getVersionHandler)
+
+		// Workflows
+		api.GET("/workflows", app.listWorkflowsHandler)
+		api.POST("/workflows", app.createWorkflowHandler)
+		api.GET("/workflows/defaults", app.workflowDefaultsHandler)
+		api.GET("/persistence", persistenceHandler(persistence))
+		api.POST("/workflows/preview", app.workflowPreviewHandler)
+		api.PUT("/workflows/:id", app.updateWorkflowHandler)
+		api.DELETE("/workflows/:id", app.deleteWorkflowHandler)
+		api.GET("/workflows/:id/documents", app.workflowDocumentsHandler)
 	}
 
 	// Serve frontend files
@@ -552,6 +588,9 @@ func main() {
 			c.File("web-app/dist/index.html")
 		})
 		router.GET("/adhoc-analysis", func(c *gin.Context) {
+			c.File("web-app/dist/index.html")
+		})
+		router.GET("/workflows", func(c *gin.Context) {
 			c.File("web-app/dist/index.html")
 		})
 		router.GET("/favicon.ico", func(c *gin.Context) {
@@ -590,6 +629,10 @@ func main() {
 		})
 		// adhoc-analysis route
 		router.GET("/adhoc-analysis", func(c *gin.Context) {
+			serveEmbeddedFile(c, "", "index.html")
+		})
+		// workflows route
+		router.GET("/workflows", func(c *gin.Context) {
 			serveEmbeddedFile(c, "", "index.html")
 		})
 	}
@@ -988,8 +1031,9 @@ func removeTagFromList(tags []string, tagToRemove string) []string {
 }
 
 // systemTags returns every tag paperless-gpt manages itself: the triggers it
-// watches for and the markers it writes. None of them describe a document, so
-// none of them belong in a suggestion prompt.
+// watches for and the markers it writes, including per-workflow trigger and
+// completion tags. None of them describe a document, so none of them belong
+// in a suggestion prompt.
 //
 // Configured-empty tags are skipped, because "" would otherwise match nothing
 // useful and only obscures intent.
@@ -1002,11 +1046,16 @@ func systemTags() []string {
 		autoTagComplete,
 		pdfOCRCompleteTag,
 	}
+	configured = append(configured, workflowManagedTags()...)
+	seen := make(map[string]bool, len(configured))
 	tags := make([]string, 0, len(configured))
 	for _, tag := range configured {
-		if tag != "" {
-			tags = append(tags, tag)
+		key := strings.ToLower(tag)
+		if tag == "" || seen[key] {
+			continue
 		}
+		seen[key] = true
+		tags = append(tags, tag)
 	}
 	return tags
 }
@@ -1399,19 +1448,7 @@ func createVisionLLM() (llms.Model, error) {
 }
 
 func createCustomHTTPClient() *http.Client {
-	// Create custom transport that adds headers
-	customTransport := &headerTransport{
-		transport: http.DefaultTransport,
-		headers: map[string]string{
-			"X-Title": "paperless-gpt",
-		},
-	}
-
-	// Create custom client with the transport
-	httpClient := http.DefaultClient
-	httpClient.Transport = customTransport
-
-	return httpClient
+	return ocr.OpenAIHTTPClient()
 }
 
 // ollamaRequestTimeout returns the per-request timeout for Ollama HTTP calls.
@@ -1449,19 +1486,4 @@ func ollamaHTTPClientWithTimeout() *http.Client {
 	}
 	base.Timeout = timeout
 	return base
-}
-
-// headerTransport is a custom http.RoundTripper that adds custom headers to requests
-type headerTransport struct {
-	transport http.RoundTripper
-	headers   map[string]string
-}
-
-// RoundTrip implements the http.RoundTripper interface
-func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	req = req.Clone(req.Context())
-	for key, value := range t.headers {
-		req.Header.Set(key, value)
-	}
-	return t.transport.RoundTrip(req)
 }
