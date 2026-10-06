@@ -106,10 +106,12 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   run: the Document AI text is saved, the document leaves the OCR queue and the LLM stage
   runs; only the Activity entry shows "Searchable PDF failed". Deliberate: retrying would
   re-run Document AI and end in `paperless-gpt-failed` without LLM filling.
-- `app_llm_googleai.go` treats a Gemini candidate with no content parts as an error. For tag
-  generation on text where no existing tag fits, Gemini returns nothing, so the document is
-  fail-tagged after `AUTO_TAG_MAX_RETRIES`. Treating an empty tag answer as "no tags" would
-  avoid that. Not requested yet.
+- Left as is on purpose: `app_llm_googleai.go` treats an empty Gemini answer as an error, so a
+  document whose tag generation keeps coming back empty is fail-tagged after
+  `AUTO_TAG_MAX_RETRIES`. So far that has only happened to documents with no real text, which
+  need a human anyway, and an empty answer can also mean a safety block or exhausted output
+  tokens. If it ever hits a real document: put the candidate's `FinishReason` in the error, and
+  treat an empty answer as "no tags" only in the tag step and only when it is `STOP`.
 - `pdf` mode could send non-PDF originals to one whole-document OCR call (as `whole_pdf`
   does) instead of failing. Currently handled by the workflow routing above.
 - A version paperless-ngx has not confirmed within 5 minutes keeps paperless-ngx's own
@@ -117,8 +119,11 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   numbers in right-to-left lines), and search keeps the original's text: a manual job then
   writes no text (its run shows a warning), and the auto loop's content update may land on
   the document before the version exists.
-- ocrchestra fork (`feat/unicode-text-layer`): upstream PR candidate. It also fixes gdocai's
-  inverted boxes for sideways text.
+- ocrchestra fork (`feat/unicode-text-layer`): upstream `gardar/ocrchestra` is dormant (no push
+  since 2025-05) and has an open PR (#12) with the same font change but no right-to-left
+  handling. Offered there as a comment instead of a competing PR; waiting on the maintainer.
+  Upstream paperless-gpt still pins gardar's original, so this fork's `replace` is what keeps
+  the Arabic text layer correct.
 - Documents that get no searchable PDF today, each for its own reason: ocrchestra's `ApplyOCR`
   (gofpdi) cannot read some xref streams ("/Columns <= 4") and fails the PDF — rewriting the
   original with pdfcpu (xref table) before `ApplyOCR` would likely fix it; Document AI can
