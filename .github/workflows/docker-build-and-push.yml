@@ -11,6 +11,10 @@ on:
       - main
     tags:
       - 'v*.*.*'
+    # A push that only changes Markdown builds no image: a new :latest digest with
+    # unchanged code would still show as a pending update on the image card.
+    paths-ignore:
+      - '**.md'
   pull_request:
     branches:
       - main
@@ -72,8 +76,10 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
             echo "TAGS=${GHCR_REPO}:${VERSION},${GHCR_REPO}:latest" >> $GITHUB_ENV
+            echo "IMAGE_VERSION=${VERSION}" >> $GITHUB_ENV
           else
             echo "TAGS=${GHCR_REPO}:latest,${GHCR_REPO}:${GITHUB_SHA}" >> $GITHUB_ENV
+            echo "IMAGE_VERSION=${GITHUB_SHA::7}" >> $GITHUB_ENV
           fi
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -84,6 +90,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: ${{ env.TAGS }}
+          # Read by the image card to show which commits an update spans.
+          labels: |
+            org.opencontainers.image.version=${{ env.IMAGE_VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           build-args: |
             VERSION=${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
             COMMIT=${{ github.sha }}

@@ -15,8 +15,10 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 - Run the whole package. `TestTokenLimitInCreatedDateGeneration` panics when run on its own
   (it relies on a template another test sets) — an upstream test-isolation bug.
 - CI (`.github/workflows/docker-build-and-push.yml`) is the fork's own: one amd64 build that
-  pushes `ghcr.io/kzaoaai/paperless-gpt:latest` and `:<sha>` on every push to `main`, plus
-  `workflow_dispatch`. No arm64, manifest-merge or E2E jobs — AGENTS.md's CI section does not
+  pushes `ghcr.io/kzaoaai/paperless-gpt:latest` and `:<sha>` on every push to `main` that
+  changes something other than Markdown (`paths-ignore: '**.md'`), plus `workflow_dispatch`.
+  Images carry `org.opencontainers.image.version` (short commit) and `.revision` labels; the
+  lab's image-update card reads them to show which commits an update spans. No arm64, manifest-merge or E2E jobs — AGENTS.md's CI section does not
   apply here.
 - A push never deploys. Production runs the image as one service of a Komodo-managed compose
   stack (UI-defined: Komodo's DB is the master copy of the compose). Deploy = change the
@@ -24,6 +26,12 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   recreate only this service with `docker compose -p <project> pull paperless-gpt` and
   `docker compose -p <project> up -d --no-deps paperless-gpt`. Never redeploy the whole stack
   for this: it also pulls paperless-ngx, which tracks a moving tag.
+- After a push that builds an image, the pushing session records the review the image-update
+  card needs, since it knows what changed: once the build is green, in the homelab-ops
+  workspace run `bin/image-check.sh --updates` (only a full run refreshes the card), then
+  `bin/update-review.sh paperless-ngx paperless-gpt SAFE|NEEDS_CHANGE|HOLD "<what changed>"
+  ["<what to do>"]`. The verdict binds to that exact digest. It records a review; it does not
+  deploy, which stays AA's call from the card.
 
 ### Syncing upstream
 
