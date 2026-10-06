@@ -97,12 +97,9 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 
 ### Open items
 
-- Production has not been redeployed since the upstream merge `6e8098c`: it still runs the image
-  built before it, so the next redeploy brings 37 upstream commits at once (AI workflows,
-  automatic document linking, PDFium and langchaingo updates, history and tag fixes). Deploy it
-  as its own step and tag the running image for rollback first. Both new features are opt-in:
-  without workflows the global `AUTO_TAG` path is unchanged, and document linking only fills
-  Document Link fields listed in the custom-field settings.
+- Production runs `b3e406b` (deployed 2026-10-06, including the upstream merge `6e8098c`). It had
+  processed no real document yet at deploy time: the first scan through the new PDF library
+  (go-pdfium 1.21.1) is its real test.
 - `PDF_UPLOAD_MODE=version` is upstream PR icereed/paperless-gpt#1125 (open). Once it merges,
   drop it from the sync checklist above.
 - `new` upload mode still copies no `document_type`, `custom_fields`, `storage_path` or
