@@ -116,9 +116,14 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 
 ### Open items
 
-- Production runs `b3e406b` (deployed 2026-10-06, including the upstream merge `6e8098c`). It had
-  processed no real document yet at deploy time: the first scan through the new PDF library
-  (go-pdfium 1.21.1) is its real test.
+- Production runs `6ef43dd` (deployed 2026-10-07): the rebuilt-PDF check and the gofpdi and
+  ocrchestra page-size fixes. Verified on a real mixed-size scan (10 pages, three sizes): the new
+  version matched the original's page sizes and rendering. A sideways scan was refused as designed.
+- Sideways scans get no searchable PDF (`pdfocr.ErrPageGeometry`). Placing their words would need
+  the direction Document AI turned the page; its response probably carries it (unchecked), but
+  `gdocai` does not keep it in the hOCR. Not requested.
+- The gofpdi fix is not offered upstream (phpdave11/gofpdi, inactive), by AA's choice; the
+  `replace` stays until upstream fixes `ImportPage`/`UseTemplate`.
 - `PDF_UPLOAD_MODE=version` is upstream PR icereed/paperless-gpt#1125 (open). Once it merges,
   drop it from the sync checklist above.
 - `new` upload mode still copies no `document_type`, `custom_fields`, `storage_path` or
