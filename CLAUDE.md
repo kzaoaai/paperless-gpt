@@ -65,6 +65,17 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     (branch `feat/unicode-text-layer`) for the Unicode text layer. Keep the `replace` when
     upstream moves ocrchestra; rebase the fork branch onto the new version instead. Guarded by
     `textlayer_test.go`.
+  - `go.mod` also replaces `github.com/phpdave11/gofpdi` with the kzaoaai/gofpdi fork (branch
+    `fix/import-page-boxes`): upstream gofpdi (through v1.0.16) gives every imported page page 1's
+    box and aspect ratio, which crops, distorts or blanks any page sized unlike page 1. A `replace`
+    in ocrchestra does not reach this module, so this one must stay too. ocrchestra keeps each
+    page's original size, scales the hOCR onto it, and fails with `pdfocr.ErrPageGeometry` when the
+    hOCR page is turned (Document AI turns sideways scans upright). Guarded by `pdf_guard_test.go`.
+  - Before a searchable PDF is uploaded, `checkRebuiltPDF` (`pdf_guard.go`) renders it and the
+    original: page count, each page's size (1 pt) and ink (18 dpi) must match, since the text layer
+    is invisible. A refusal, or `ErrPageGeometry`, is PDF action `skipped`; the text is still
+    written. Never remove the check: a version that does not look like the original replaces what
+    paperless-ngx shows and downloads.
 
 ### Production invariants (config, not code)
 
@@ -135,7 +146,9 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   handling. Offered there as a comment instead of a competing PR; waiting on the maintainer.
   Upstream paperless-gpt still pins gardar's original, so this fork's `replace` is what keeps
   the Arabic text layer correct.
-- Documents that get no searchable PDF today, each for its own reason: ocrchestra's `ApplyOCR`
+- Documents that get no searchable PDF today, each for its own reason: a page Document AI
+  turned upright (a sideways scan) is refused by ocrchestra, since its words cannot be placed
+  without knowing which way it was turned; ocrchestra's `ApplyOCR`
   (gofpdi) cannot read some xref streams ("/Columns <= 4") and fails the PDF — rewriting the
   original with pdfcpu (xref table) before `ApplyOCR` would likely fix it; Document AI can
   reject a single page as corrupt, which fails the whole run; documents over

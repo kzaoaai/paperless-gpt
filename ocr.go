@@ -525,8 +525,21 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 							return nil, fmt.Errorf("no suitable data available for PDF generation")
 						}
 						pdfData, err = applyOCR()
+						if err == nil && originalPDFData != nil {
+							if gerr := checkRebuiltPDF(ctx, originalPDFData, pdfData); gerr != nil {
+								err = fmt.Errorf("%w: %v", errRebuiltPDFDiffers, gerr)
+							}
+						}
 
-						if err != nil {
+						if errors.Is(err, pdfocr.ErrPageGeometry) || errors.Is(err, errRebuiltPDFDiffers) {
+							// The recognized text is still kept; only the searchable PDF,
+							// which would not look like the original, is withheld.
+							docLogger.WithError(err).Warn("Not uploading the searchable PDF because it would not look like the original")
+							if options.UploadPDF {
+								processedDoc.PDFAction = "skipped"
+								processedDoc.PDFDetail = fmt.Sprintf("The searchable PDF would not look like the original (%v); the document was left unchanged and keeps the recognized text.", err)
+							}
+						} else if err != nil {
 							docLogger.WithError(err).Error("Failed to apply OCR to PDF")
 							if options.UploadPDF {
 								processedDoc.PDFAction = "failed"

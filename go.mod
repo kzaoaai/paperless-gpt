@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	cloud.google.com/go/documentai v1.39.0
+	codeberg.org/go-pdf/fpdf v0.11.0
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/disintegration/imaging v1.6.2
 	github.com/fatih/color v1.18.0
@@ -32,7 +33,6 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/longrunning v0.8.0 // indirect
-	codeberg.org/go-pdf/fpdf v0.11.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
@@ -117,4 +117,6 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
 
-replace github.com/gardar/ocrchestra => github.com/kzaoaai/ocrchestra v0.0.0-20260929104730-695778d025c9
+replace github.com/gardar/ocrchestra => github.com/kzaoaai/ocrchestra v0.0.0-20261007201510-8649e22c5b2b
+
+replace github.com/phpdave11/gofpdi => github.com/kzaoaai/gofpdi v1.0.14-0.20261007200936-ab5190d6c1da

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"paperless-gpt/internal/pdfrender"
 	"paperless-gpt/ocr"
 
 	"github.com/gardar/ocrchestra/pkg/hocr"
@@ -216,7 +218,7 @@ type hocrStubProvider struct {
 	pages []hocr.Page
 }
 
-func (p *hocrStubProvider) ProcessImage(_ context.Context, _ []byte, pageNumber int) (*ocr.OCRResult, error) {
+func (p *hocrStubProvider) ProcessImage(ctx context.Context, data []byte, pageNumber int) (*ocr.OCRResult, error) {
 	text := p.word
 	if text == "" {
 		text = "Invoice"
@@ -226,12 +228,28 @@ func (p *hocrStubProvider) ProcessImage(_ context.Context, _ []byte, pageNumber 
 	p.pages = append(p.pages, hocr.Page{
 		ID:         fmt.Sprintf("page_%d", pageNumber),
 		PageNumber: pageNumber,
-		BBox:       hocr.BoundingBox{X1: 0, Y1: 0, X2: 2480, Y2: 3508},
+		BBox:       stubPageBox(ctx, data),
 		Lines: []hocr.Line{{ID: fmt.Sprintf("line_%d", pageNumber), BBox: word.BBox,
 			Words: []hocr.Word{word}}},
 	})
 	return &ocr.OCRResult{Text: text}, nil
 }
+
+// stubPageBox is the hOCR page box Document AI would report for data: the
+// page rendered at 300 dpi, or A4 when data is not a readable PDF.
+func stubPageBox(ctx context.Context, data []byte) hocr.BoundingBox {
+	box := hocr.BoundingBox{X2: 2480, Y2: 3508}
+	doc, err := pdfrender.Open(ctx, data)
+	if err != nil {
+		return box
+	}
+	defer doc.Close()
+	if w, h, err := doc.PageSize(0); err == nil {
+		box.X2, box.Y2 = math.Round(w*300/72), math.Round(h*300/72)
+	}
+	return box
+}
+
 func (p *hocrStubProvider) IsHOCREnabled() bool       { return true }
 func (p *hocrStubProvider) GetHOCRPages() []hocr.Page { return p.pages }
 func (p *hocrStubProvider) GetHOCRDocument() (*hocr.HOCR, error) {
