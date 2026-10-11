@@ -125,9 +125,10 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 
 ### Open items
 
-- Production runs `6ef43dd` (deployed 2026-10-07): the rebuilt-PDF check and the gofpdi and
-  ocrchestra page-size fixes. Verified on a real mixed-size scan (10 pages, three sizes): the new
-  version matched the original's page sizes and rendering. A sideways scan was refused as designed.
+- Production runs `0e8da29` (deployed 2026-10-11): the `normalizePDF` retry and CropBox import.
+  Verified before deploy only in tests and on local copies of docs 2011, 2019 and 2020 with a
+  stub OCR provider: all three reached `versioned`. Not yet checked on a live run: that Document
+  AI's hOCR of a cropped iOS page lines up with the CropBox (select text in the new version).
 - Sideways scans get no searchable PDF (`pdfocr.ErrPageGeometry`). Placing their words would need
   the direction Document AI turned the page; its response probably carries it (unchecked), but
   `gdocai` does not keep it in the hOCR. Not requested.
