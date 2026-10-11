@@ -70,7 +70,9 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     box and aspect ratio, which crops, distorts or blanks any page sized unlike page 1. A `replace`
     in ocrchestra does not reach this module, so this one must stay too. ocrchestra keeps each
     page's original size, scales the hOCR onto it, and fails with `pdfocr.ErrPageGeometry` when the
-    hOCR page is turned (Document AI turns sideways scans upright). Guarded by `pdf_guard_test.go`.
+    hOCR page is turned (Document AI turns sideways scans upright). Each page is imported with its
+    CropBox (its MediaBox when it has none): iOS scans crop part of the MediaBox away, and importing
+    the MediaBox made the guard below refuse them. Guarded by `pdf_guard_test.go`.
   - Before a searchable PDF is uploaded, `checkRebuiltPDF` (`pdf_guard.go`) renders it and the
     original: page count, each page's size (1 pt) and ink (18 dpi) must match, since the text layer
     is invisible. A refusal, or `ErrPageGeometry`, is PDF action `skipped`; the text is still
@@ -164,9 +166,4 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   reject a single page as corrupt, which fails the whole run; documents over
   `OCR_LIMIT_PAGES` (30) are skipped. Left as is by AA's choice. gofpdi's xref-stream limit
   ("/Columns <= 4") should now be covered by the `normalizePDF` retry (no sample to verify).
-- A page whose CropBox is smaller than its MediaBox gets no searchable PDF: ocrchestra imports
-  the MediaBox (`modify.go`), so `checkRebuiltPDF` sees a bigger page and refuses it. iOS-made
-  PDFs carry such a CropBox (docs 2019 and 2020, 2026-10-10). Fixed in the ocrchestra fork
-  (`d0e5a88`, `feat/unicode-text-layer`: import each page's CropBox), not yet pushed or pinned
-  here; once it is, bump the `replace` in `go.mod` and drop this item.
 - `gofmt -l .` lists several upstream files; leave them to upstream.

@@ -51,6 +51,18 @@ func iosAnnotatedPDF() []byte {
 	)
 }
 
+// iosScanPDF is a page shaped like an iOS scan: a CropBox showing part of
+// the MediaBox, away from the origin, and the name /DA annotation.
+func iosScanPDF() []byte {
+	return pdfOf(
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /CropBox [20 10 270 190] /Contents 4 0 R /Annots [5 0 R] >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(pageContent), pageContent),
+		"<< /Type /Annot /Subtype /FreeText /Rect [30 20 100 40] /F 4 /Q 0 /DA /Helvetica#2018#20Tf#200#20g >>",
+	)
+}
+
 // ascii85PDF is a page whose content stream is ASCII85-encoded.
 func ascii85PDF() []byte {
 	enc := make([]byte, ascii85.MaxEncodedLen(len(pageContent)))
@@ -188,4 +200,10 @@ func TestProcessDocumentOCRVersionsPDFsGofpdiCannotRead(t *testing.T) {
 			assert.NotEmpty(t, uploaded)
 		})
 	}
+}
+
+func TestProcessDocumentOCRVersionsAnIOSScan(t *testing.T) {
+	doc, uploaded := runVersionOCROn(t, iosScanPDF(), "Invoice")
+	assert.Equal(t, "versioned", doc.PDFAction, doc.PDFDetail)
+	assert.NotEmpty(t, uploaded)
 }
