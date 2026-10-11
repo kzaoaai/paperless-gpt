@@ -126,9 +126,13 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 ### Open items
 
 - Production runs `0e8da29` (deployed 2026-10-11): the `normalizePDF` retry and CropBox import.
-  Verified before deploy only in tests and on local copies of docs 2011, 2019 and 2020 with a
-  stub OCR provider: all three reached `versioned`. Not yet checked on a live run: that Document
-  AI's hOCR of a cropped iOS page lines up with the CropBox (select text in the new version).
+  Verified live on an iOS scan with a CropBox (manual job, PDF action `versioned`): the new page
+  has the CropBox's size, and the text layer's words sit over the printed words, so Document
+  AI's hOCR of such a page describes the CropBox.
+- The OCR page's `auto_queue_count` counts every document tagged with `AUTO_OCR_TAG`, including
+  paperless-ngx version rows (auto-matching stamps the tag on them) and trashed documents, so it
+  overstates the queue (85 tagged, none of them a live root document, on 2026-10-11). The auto
+  loop does not process those rows. Cosmetic; not requested.
 - Sideways scans get no searchable PDF (`pdfocr.ErrPageGeometry`). Placing their words would need
   the direction Document AI turned the page; its response probably carries it (unchecked), but
   `gdocai` does not keep it in the hOCR. Not requested.
