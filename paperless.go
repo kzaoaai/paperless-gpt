@@ -1641,27 +1641,55 @@ func (client *PaperlessClient) DownloadDocumentAsPDF(ctx context.Context, docume
 	// doesn't cost the same split work regardless of OCR_LIMIT_PAGES - the
 	// unlimited split extracted (and wrote to disk) every page up front and
 	// only used the first pagesToProcess afterward.
-	splitSourcePath := originalPDFPath
-	if pagesToProcess < totalPages {
-		trimDir, err := os.MkdirTemp("", "pgpt-trim-*")
-		if err != nil {
-			return nil, nil, 0, fmt.Errorf("error creating temp dir for page-limited trim: %w", err)
-		}
-		defer os.RemoveAll(trimDir)
+	splitPages := func(sourcePath string) error {
+		splitSourcePath := sourcePath
+		if pagesToProcess < totalPages {
+			trimDir, err := os.MkdirTemp("", "pgpt-trim-*")
+			if err != nil {
+				return fmt.Errorf("error creating temp dir for page-limited trim: %w", err)
+			}
+			defer os.RemoveAll(trimDir)
 
-		// Keep the "original.pdf" basename so pdfcpu's split output naming
-		// (derived from the input file's basename) still produces
-		// original_1.pdf, original_2.pdf, ... in docDir below.
-		splitSourcePath = filepath.Join(trimDir, "original.pdf")
-		selection := []string{fmt.Sprintf("1-%d", pagesToProcess)}
-		if err := api.TrimFile(originalPDFPath, splitSourcePath, selection, nil); err != nil {
-			return nil, nil, 0, fmt.Errorf("error trimming PDF to page limit: %w", err)
+			// Keep the "original.pdf" basename so pdfcpu's split output naming
+			// (derived from the input file's basename) still produces
+			// original_1.pdf, original_2.pdf, ... in docDir below.
+			splitSourcePath = filepath.Join(trimDir, "original.pdf")
+			selection := []string{fmt.Sprintf("1-%d", pagesToProcess)}
+			if err := api.TrimFile(sourcePath, splitSourcePath, selection, nil); err != nil {
+				return fmt.Errorf("error trimming PDF to page limit: %w", err)
+			}
 		}
+		if err := api.SplitFile(splitSourcePath, docDir, 1, nil); err != nil {
+			return fmt.Errorf("error splitting PDF: %w", err)
+		}
+		return nil
 	}
-
-	err = api.SplitFile(splitSourcePath, docDir, 1, nil)
-	if err != nil {
-		return nil, nil, 0, fmt.Errorf("error splitting PDF: %w", err)
+	if err := splitPages(originalPDFPath); err != nil {
+		// pdfcpu refuses some PDFs other readers open (an iOS-made PDF writes
+		// annotation /DA entries as names). Split a normalized copy instead;
+		// the pages only go to OCR, and the original stays as it is.
+		normalized, nerr := normalizePDF(pdfData)
+		if nerr != nil {
+			return nil, nil, 0, fmt.Errorf("%w (normalizing the PDF failed too: %v)", err, nerr)
+		}
+		normDir, derr := os.MkdirTemp("", "pgpt-norm-*")
+		if derr != nil {
+			return nil, nil, 0, fmt.Errorf("error creating temp dir for normalized PDF: %w", derr)
+		}
+		defer os.RemoveAll(normDir)
+		normalizedPath := filepath.Join(normDir, "original.pdf")
+		if werr := os.WriteFile(normalizedPath, normalized, 0644); werr != nil {
+			return nil, nil, 0, werr
+		}
+		if files, gerr := filepath.Glob(filepath.Join(docDir, "original_*.pdf")); gerr == nil {
+			for _, file := range files {
+				os.Remove(file)
+			}
+		}
+		if rerr := splitPages(normalizedPath); rerr != nil {
+			return nil, nil, 0, fmt.Errorf("%w (and after normalizing: %v)", err, rerr)
+		}
+		log.WithError(err).Warnf("Document %d: split a normalized copy of the PDF", documentID)
 	}
 
 	// pdfcpu creates files with names like "original_1.pdf", "original_2.pdf", etc. (without leading zeros)

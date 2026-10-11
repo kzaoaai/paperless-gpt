@@ -76,6 +76,13 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     is invisible. A refusal, or `ErrPageGeometry`, is PDF action `skipped`; the text is still
     written. Never remove the check: a version that does not look like the original replaces what
     paperless-ngx shows and downloads.
+  - When pdfcpu cannot split a PDF, or gofpdi cannot read it in `ApplyOCR`, the step is retried
+    once on `normalizePDF`'s rewrite (`pdf_normalize.go`): an annotation `/DA` written as a name
+    (iOS form-field detection) becomes a string, and the copy has a classic xref table, no object
+    streams, and Flate instead of ASCII85/ASCIIHex/LZW/RunLength. pdfcpu rejects a name `/DA` even
+    in relaxed mode (its default), up to v0.16.1. The original is never changed, and
+    `checkRebuiltPDF` still compares against it. Called in `DownloadDocumentAsPDF`
+    (`paperless.go`) and `ProcessDocumentOCR` (`ocr.go`). Tests: `pdf_normalize_test.go`.
 
 ### Production invariants (config, not code)
 
@@ -153,9 +160,13 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   the Arabic text layer correct.
 - Documents that get no searchable PDF today, each for its own reason: a page Document AI
   turned upright (a sideways scan) is refused by ocrchestra, since its words cannot be placed
-  without knowing which way it was turned; ocrchestra's `ApplyOCR`
-  (gofpdi) cannot read some xref streams ("/Columns <= 4") and fails the PDF — rewriting the
-  original with pdfcpu (xref table) before `ApplyOCR` would likely fix it; Document AI can
+  without knowing which way it was turned; Document AI can
   reject a single page as corrupt, which fails the whole run; documents over
-  `OCR_LIMIT_PAGES` (30) are skipped. Left as is by AA's choice.
+  `OCR_LIMIT_PAGES` (30) are skipped. Left as is by AA's choice. gofpdi's xref-stream limit
+  ("/Columns <= 4") should now be covered by the `normalizePDF` retry (no sample to verify).
+- A page whose CropBox is smaller than its MediaBox gets no searchable PDF: ocrchestra imports
+  the MediaBox (`modify.go`), so `checkRebuiltPDF` sees a bigger page and refuses it. iOS-made
+  PDFs carry such a CropBox (docs 2019 and 2020, 2026-10-10). Fixed in the ocrchestra fork
+  (`d0e5a88`, `feat/unicode-text-layer`: import each page's CropBox), not yet pushed or pinned
+  here; once it is, bump the `replace` in `go.mod` and drop this item.
 - `gofmt -l .` lists several upstream files; leave them to upstream.

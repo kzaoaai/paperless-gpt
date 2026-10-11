@@ -508,15 +508,16 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 						// For both "pdf" and "whole_pdf" modes, use ApplyOCR with original PDF data.
 						// pdfocr.ApplyOCR transitively calls into gofpdi which can panic on
 						// malformed PDFs (#945). Recover so the worker keeps draining the queue.
-						applyOCR := func() (data []byte, err error) {
+						usePDF := (processMode == "pdf" || processMode == "whole_pdf") && originalPDFData != nil
+						applyOCR := func(base []byte) (data []byte, err error) {
 							defer func() {
 								if r := recover(); r != nil {
 									err = fmt.Errorf("apply OCR panicked: %v", r)
 								}
 							}()
-							if (processMode == "pdf" || processMode == "whole_pdf") && originalPDFData != nil {
+							if usePDF {
 								docLogger.Debug("Using ApplyOCR with original PDF data")
-								return pdfocr.ApplyOCR(originalPDFData, hocrDoc, pdfConfig)
+								return pdfocr.ApplyOCR(base, hocrDoc, pdfConfig)
 							}
 							if len(imageDataList) > 0 {
 								docLogger.Debug("Using AssembleWithOCR with image data")
@@ -524,7 +525,23 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 							}
 							return nil, fmt.Errorf("no suitable data available for PDF generation")
 						}
-						pdfData, err = applyOCR()
+						pdfData, err = applyOCR(originalPDFData)
+						if err != nil && usePDF && !errors.Is(err, pdfocr.ErrPageGeometry) {
+							// gofpdi cannot read some valid PDFs (object streams,
+							// ASCII85 page content, some xref streams). Retry on a
+							// normalized copy; checkRebuiltPDF below still compares
+							// the result with the original.
+							if normalized, nerr := normalizePDF(originalPDFData); nerr != nil {
+								docLogger.WithError(nerr).Warn("Could not normalize the PDF to retry applying OCR")
+							} else if retried, rerr := applyOCR(normalized); errors.Is(rerr, pdfocr.ErrPageGeometry) {
+								err = rerr
+							} else if rerr != nil {
+								err = fmt.Errorf("%w (and on a normalized copy: %v)", err, rerr)
+							} else {
+								docLogger.WithError(err).Info("Applied OCR to a normalized copy of the PDF")
+								pdfData, err = retried, nil
+							}
+						}
 						if err == nil && originalPDFData != nil {
 							if gerr := checkRebuiltPDF(ctx, originalPDFData, pdfData); gerr != nil {
 								err = fmt.Errorf("%w: %v", errRebuiltPDFDiffers, gerr)
