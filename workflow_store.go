@@ -64,6 +64,8 @@ type workflowFile struct {
 	GenerateCustomFields   *bool  `json:"generate_custom_fields,omitempty"`
 	EnableOCR              *bool  `json:"enable_ocr,omitempty"`
 	OCRLimitPages          *int   `json:"ocr_limit_pages,omitempty"`
+	CustomFieldIDs         []int  `json:"custom_field_ids,omitempty"`
+	RequireApproval        bool   `json:"require_approval,omitempty"`
 }
 
 // workflowStore holds the workflows read from disk. Every write goes to disk
@@ -293,6 +295,8 @@ func readWorkflowDir(dir string) (WorkflowConfig, error) {
 		GenerateCustomFields:   f.GenerateCustomFields,
 		EnableOCR:              f.EnableOCR,
 		OCRLimitPages:          f.OCRLimitPages,
+		CustomFieldIDs:         f.CustomFieldIDs,
+		RequireApproval:        f.RequireApproval,
 	}
 	if wf.TriggerTag == "" {
 		return WorkflowConfig{}, fmt.Errorf("%s has no trigger_tag", workflowFileName)
@@ -333,6 +337,8 @@ func writeWorkflowDir(dir string, wf WorkflowConfig) error {
 		GenerateCustomFields:   wf.GenerateCustomFields,
 		EnableOCR:              wf.EnableOCR,
 		OCRLimitPages:          wf.OCRLimitPages,
+		CustomFieldIDs:         wf.CustomFieldIDs,
+		RequireApproval:        wf.RequireApproval,
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

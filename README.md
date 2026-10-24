@@ -63,7 +63,7 @@ https://github.com/user-attachments/assets/bd5d38b9-9309-40b9-93ca-918dfa4f3fd4
    Fields of type **Document Link** are special: instead of filling in text, paperless-gpt resolves the references a document cites to the actual documents in your archive (see [Links related documents](#key-highlights) above).
 
 8. **Searchable & Selectable PDFs**  
-   Generate PDFs with transparent text layers positioned accurately over each word, making your documents both searchable and selectable while preserving the original appearance.
+   Generate PDFs with transparent text layers positioned accurately over each word, making your documents both searchable and selectable while preserving the original appearance. With paperless-ngx 3.0, the searchable PDF can be added as a **new version of the same document**, so it keeps its ID, tags, custom fields and notes, and the original stays available as the previous version (`PDF_UPLOAD_MODE=version`, see [PDF Upload to paperless-ngx](#pdf-upload-to-paperless-ngx)).
 
 9. **Extensive Customization**
 
@@ -289,7 +289,8 @@ services:
       CREATE_LOCAL_PDF: "false" # Optional, save enhanced PDFs locally
       LOCAL_PDF_PATH: "/app/pdf" # Optional, path for PDF files
       PDF_UPLOAD: "false" # Optional, upload enhanced PDFs to paperless-ngx
-      PDF_REPLACE: "false" # Optional and DANGEROUS, delete original after upload
+      PDF_UPLOAD_MODE: "new" # Optional: "new" (new document) or "version" (new version of the same document, paperless-ngx 3.0+, recommended)
+      PDF_REPLACE: "false" # Optional and DANGEROUS, delete original after upload ("new" mode only)
       PDF_COPY_METADATA: "true" # Optional, copy metadata from original document
       PDF_OCR_TAGGING: "true" # Optional, add tag to processed documents
       PDF_OCR_COMPLETE_TAG: "paperless-gpt-ocr-complete" # Optional, tag name
@@ -300,6 +301,7 @@ services:
       # DOCLING_IMAGE_EXPORT_MODE: "placeholder" # Optional, defaults to "embedded"
       # DOCLING_OCR_PIPELINE: "standard" # Optional, defaults to "vlm"
       # DOCLING_OCR_ENGINE: "easyocr" # Optional, defaults to "easyocr" (only used when `DOCLING_OCR_PIPELINE is set to 'standard')
+      # DOCLING_OUTPUT_FORMAT: "md" # Optional, defaults to "md", other option: "text"
 
 
       AUTO_OCR_TAG: "paperless-gpt-ocr-auto" # Optional, default: paperless-gpt-ocr-auto
@@ -458,6 +460,7 @@ paperless-gpt supports four different OCR providers, each with unique strengths 
   DOCLING_IMAGE_EXPORT_MODE: "placeholder" # Optional, defaults to "embedded"
   DOCLING_OCR_PIPELINE: "standard" # Optional, defaults to "vlm"
   DOCLING_OCR_ENGINE: "macocr" # Optional, defaults to "easyocr" (only used when `DOCLING_OCR_PIPELINE is set to 'standard')
+  DOCLING_OUTPUT_FORMAT: "md" # Optional, defaults to "md", other option: "text"
   ```
 
 ## OCR Processing Modes
@@ -509,6 +512,29 @@ environment:
 ```
 
 > **Note**: Not all OCR providers support all processing modes. Some may work better with certain modes than others. Processing as PDF might use more or fewer API tokens than processing as images, depending on the provider. Results may vary based on document complexity and provider capabilities. It's recommended to experiment with different modes to find what works best for your specific documents and OCR provider.
+
+### Skip OCR for pages that already have text
+
+Many archives mix born-digital documents (invoices, statements, letters generated as PDF), whose text is already exact, with scans. OCR on the digital pages costs time and tokens and can only make their text worse. In one real archive we checked, about half of all pages were digital. With this option paperless-gpt checks each page of the **original** file first and only sends pages to OCR that need it:
+
+```yaml
+environment:
+  OCR_SKIP_DIGITAL_PAGES: "true"
+```
+
+| Page | Decision |
+|---|---|
+| No text layer | OCR |
+| Invisible text over a scanned image (a scanner's or OCR tool's text layer) | OCR, that is what paperless-gpt improves on |
+| Broken text: replacement glyphs, mojibake such as "f¸r" or "fÃ¼r" | OCR |
+| Clean, visible text, no large images | Its own text is used |
+| A little text over a large image | OCR |
+
+- **Original, not archive:** routing looks at the original file, not paperless-ngx' archive version. The archive carries paperless-ngx' own Tesseract text on every scanned page, which is the text paperless-gpt is meant to replace.
+- **Image mode only:** it applies to the image OCR mode, and stays off for runs that create a searchable PDF or hOCR (`PDF_UPLOAD`, `CREATE_LOCAL_PDF`, `CREATE_LOCAL_HOCR`, or an OCR provider that produces hOCR such as Google Document AI), because those need OCR on every page.
+- **Never blocks OCR:** if the original is not a PDF, its page count differs from the archive version, or anything goes wrong, every page is OCRed as before.
+
+The idea comes from [doc-router](https://github.com/misbahsy/doc-router): don't pay to OCR a page that already has text on it.
 
 ## Enhanced OCR Features
 
@@ -574,9 +600,13 @@ environment:
 ```
 
 > **⚠️ WARNING ⚠️**  
-> Setting `PDF_REPLACE: "true"` will delete the original document after uploading the enhanced version. This process cannot be undone and may result in data loss if something goes wrong during the upload or metadata copying process. Use with extreme caution!
+> Setting `PDF_REPLACE: "true"` will delete the original document after uploading the enhanced version. This process cannot be undone and may result in data loss if something goes wrong during the upload or metadata copying process. Use with extreme caution! paperless-gpt only deletes the original once paperless-ngx reports the upload as imported (within about a minute); if it can't confirm that, the original is kept and the run says so.
+>
+> On paperless-ngx 3.0 or newer, use `PDF_UPLOAD_MODE: "version"` instead. It gives the same result, one document with a searchable PDF, without deleting anything: the original stays available as the previous version. `PDF_REPLACE` is ignored in that mode.
 
 ### Metadata Copying Limitations
+
+This section applies to `PDF_UPLOAD_MODE: "new"` only. In `version` mode nothing has to be copied: the searchable PDF becomes a new version of the same document, which keeps its ID, title, tags, correspondent, custom fields, notes and storage path.
 
 When copying metadata from the original document to the new one, paperless-gpt attempts to copy:
 
@@ -612,7 +642,7 @@ environment:
 
 For best results with the enhanced OCR features:
 
-1. **Initial Testing**: Start with `PDF_REPLACE: "false"` until you've confirmed the process works well with your documents.
+1. **Initial Testing**: On paperless-ngx 3.0+, prefer `PDF_UPLOAD_MODE: "version"`, which never deletes anything. With `new` mode, start with `PDF_REPLACE: "false"` until you've confirmed the process works well with your documents.
 
 2. **Regular Backups**: Ensure you have backups of your paperless-ngx database and documents before enabling document replacement.
 
@@ -650,6 +680,7 @@ For best results with the enhanced OCR features:
 | `OPENAI_API_TYPE`                   | Set to `azure` to use Azure OpenAI Service.                                                                                                                                                   | No       |                            |
 | `OPENAI_BASE_URL`                   | Base URL for OpenAI API. Use it to point to any OpenAI-compatible endpoint (OpenRouter, LM Studio, vLLM, LiteLLM, llama.cpp, Groq, …) — see [OpenAI-compatible providers](docs/openai_compatible_providers.md) for ready-made configurations. For Azure OpenAI, set to your deployment URL (e.g., `https://your-resource.openai.azure.com`). | No       |                            |
 | `OPENAI_HEADERS`                    | Comma-separated `Key=Value` pairs added as HTTP headers to every OpenAI-compatible request (e.g. `OPENAI_HEADERS=User-Agent=paperless-gpt/1.0`).                                                                                     | No       |                            |
+| `OPENROUTER_ENFORCE_ZDR`            | When `true` and `OPENAI_BASE_URL` points at openrouter.ai, adds `"provider": {"data_collection": "deny", "zdr": true}` to every LLM/VisionLLM/OCR request so OpenRouter only routes to upstream providers offering a Zero Data Retention guarantee. Requests to any other endpoint are unaffected. Narrows the provider pool for the configured model — check `https://openrouter.ai/<model>/providers` for multiple ZDR-capable providers before enabling this with a single-provider model, or a 429/5xx with no fallback can result. | No       | false                      |
 | `LLM_LANGUAGE`                      | Likely language for documents (e.g. `English`). Appears in the prompt to help the LLM.                                                                                                                                               | No       | English                    |
 | `LLM_TEMPERATURE`                   | (Ollama metadata only) Sampling temperature for title, tag, and other metadata generation. A non-negative finite value supplies the global setting; invalid, negative, `NaN`, and `Inf` values are ignored with a warning. The base fallback is `0`. An explicit per-call option still wins. It does not apply to other LLM providers or Vision OCR; use `VISION_LLM_TEMPERATURE` for supported vision providers. | No       | 0                          |
 | `LLM_MAX_TOKENS`                    | (Ollama metadata only) Positive integer or `-1`, mapped to Ollama `num_predict` as the output-token budget. When unset, paperless-gpt preserves the model/base setting. It is independent of `TOKEN_LIMIT` and `OLLAMA_CONTEXT_LENGTH`. | No | Model/base setting |
@@ -692,6 +723,7 @@ For best results with the enhanced OCR features:
 | `DOCLING_IMAGE_EXPORT_MODE`         | Mode for image export. Optional; defaults to `embedded` if unset.                                                                                                                             | No       | embedded                   |
 | `DOCLING_OCR_PIPELINE`              | Sets the pipeline type. Optional; defaults to `vlm` if unset.                                                                                                                                 | No       | vlm                        |
 | `DOCLING_OCR_ENGINE`                | Sets the ocr engine, if `DOCLING_OCR_PIPELINE` is set to `standard`. Optional; defaults to `easyocr`                                                                                          | No       | easyocr                    |
+| `DOCLING_OUTPUT_FORMAT`             | Output format requested from Docling (`to_formats`): `md` (Markdown, keeps tables and headings) or `text` (plain text). Optional; defaults to `md`.                                           | No       | md                         |
 | `CREATE_LOCAL_HOCR`                 | Whether to save hOCR files locally.                                                                                                                                                           | No       | false                      |
 | `LOCAL_HOCR_PATH`                   | Path where hOCR files will be saved when hOCR generation is enabled.                                                                                                                          | No       | /app/hocr                  |
 | `CREATE_LOCAL_PDF`                  | Whether to save enhanced PDFs locally.                                                                                                                                                        | No       | false                      |
@@ -703,6 +735,7 @@ For best results with the enhanced OCR features:
 | `PDF_OCR_TAGGING`                   | Whether to add a tag to mark documents as OCR-processed.                                                                                                                                      | No       | true                       |
 | `PDF_OCR_COMPLETE_TAG`              | Tag used to mark documents as OCR-processed. The tag is created automatically in paperless-ngx at startup if it does not exist (when `PDF_OCR_TAGGING` is enabled).                                                                                                                                                  | No       | paperless-gpt-ocr-complete |
 | `PDF_SKIP_EXISTING_OCR`             | Whether to skip OCR processing for PDFs that already have OCR. Works with `pdf` and `whole_pdf` processing modes (`OCR_PROCESS_MODE`).                                                        | No       | false                      |
+| `OCR_SKIP_DIGITAL_PAGES`            | Skip OCR for pages whose original already has a clean, visible text layer and use that text (image mode; off when a searchable PDF or hOCR is produced). See [Skip OCR for pages that already have text](#skip-ocr-for-pages-that-already-have-text). | No       | false                      |
 | `PRESERVE_EXISTING_METADATA`        | Keep a correspondent or document type that is already set on the document instead of overwriting it with the suggestion. Useful when paperless-ngx' own classifier or manual corrections should stay in charge and the LLM should only fill the gaps. | No       | false                      |
 | `AUTO_OCR_TAG`                      | Tag for automatically processing docs with OCR.                                                                                                                                               | No       | paperless-gpt-ocr-auto     |
 | `OCR_LIMIT_PAGES`                   | Limit the number of pages for OCR. Set to `0` for no limit. Not applied in `whole_pdf` mode (see [Whole PDF Mode](#whole-pdf-mode)), which always processes the entire document.              | No       | 5                          |
@@ -726,7 +759,7 @@ For best results with the enhanced OCR features:
 | `CORRESPONDENT_PROMPT_LIMIT`        | Maximum number of existing correspondents embedded into the correspondent suggestion prompt; names occurring in the document are preferred. `0` (default) sends the full list. Useful for large installations and local LLMs with small context windows. | No       | 0                          |
 
 > [!NOTE]
-> `PDF_UPLOAD`, `PDF_REPLACE`, `PDF_COPY_METADATA`, `OCR_LIMIT_PAGES` and `OCR_PROCESS_MODE` act as *defaults*. The OCR Playground can override them per run, and "Save as defaults" in the UI persists tuned values to `config/settings.json`, which then takes precedence for Auto-OCR and future runs. The **Active Configuration** panel on the Settings page shows each value's effective source (env / saved / default).
+> `PDF_UPLOAD`, `PDF_REPLACE`, `PDF_COPY_METADATA`, `OCR_LIMIT_PAGES` and `OCR_PROCESS_MODE` act as *defaults*. `PDF_UPLOAD_MODE` is set by the environment only. The OCR Playground can override them per run, and "Save as defaults" in the UI persists tuned values to `config/settings.json`, which then takes precedence for Auto-OCR and future runs. The **Active Configuration** panel on the Settings page shows each value's effective source (env / saved / default).
 
 ### Using a Different AI Provider
 
@@ -763,6 +796,8 @@ The application uses two directories for management:
 - **`default_prompts/`**: Contains the built-in, default templates. These should not be modified.
 - **`prompts/`**: Your working directory. On first run, the default templates are copied here. All edits made in the UI are saved to the files in this directory.
 - **`prompts/workflows/`**: One folder per [AI workflow](docs/workflows.md), with that workflow's settings and the prompts it changes.
+
+A prompt in `prompts/` that you never changed is updated to the current default on startup, so improvements to the default prompts reach existing installations. Prompts you edited are never touched.
 
 To ensure your custom prompts persist across container restarts, you must mount the `prompts` directory as a volume in your `docker-compose.yml`:
 
@@ -1092,6 +1127,8 @@ Common issues and solutions:
 - If PDFs aren't being generated, check that `OCR_LIMIT_PAGES` isn't set too low compared to your document page count
 - Ensure volumes are properly mounted if using `CREATE_LOCAL_PDF` or `CREATE_LOCAL_HOCR`
 - When using `PDF_REPLACE: "true"`, verify you have recent backups of your paperless-ngx data
+- With `PDF_UPLOAD_MODE: "version"`, an error saying the document was not found "or paperless-ngx is older than 3.0" means your paperless-ngx has no document versions yet: upgrade it, or use `new` mode. The OCR text is written either way.
+- With `PDF_UPLOAD_MODE: "version"`, a run that is shown as a warning means paperless-ngx accepted the new version but had not finished importing it within a minute. Check the task in paperless-ngx; running OCR again would add another version.
 
 ### Custom Field Generation Issues
 

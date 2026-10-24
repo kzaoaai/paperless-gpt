@@ -323,7 +323,10 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 		}
 	} else {
 		// Process pages as images
-		imagePaths, imgPageCount, err := app.Client.DownloadDocumentAsImages(ctx, documentID, pageLimit)
+		// Assign, don't declare: the searchable PDF check after this branch
+		// counts the processed pages from the outer imagePaths (#1144).
+		var imgPageCount int
+		imagePaths, imgPageCount, err = app.Client.DownloadDocumentAsImages(ctx, documentID, pageLimit)
 		defer func() {
 			for _, imagePath := range imagePaths {
 				if err := os.Remove(imagePath); err != nil {
@@ -352,6 +355,20 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 			"limit_pages":          pageLimit,
 		}).Debug("Downloaded document images")
 
+		// Pages that already carry good text can skip OCR. A searchable PDF
+		// or hOCR needs OCR coordinates for every page, so routing stays
+		// off when either is produced.
+		var routes []pageRoute
+		// A provider that produces hOCR builds it from every OCRed page; a
+		// routed page would be missing from it.
+		if options.UploadPDF || app.createLocalHOCR || app.createLocalPDF || hasHOCR {
+			if ocrSkipDigitalPages {
+				docLogger.Info("Page routing is off for this run: a searchable PDF or hOCR needs OCR on every page")
+			}
+		} else {
+			routes = app.planPageRouting(ctx, documentID, len(imagePaths), totalPdfPages, docLogger)
+		}
+
 		for i, imagePath := range imagePaths {
 			select {
 			case <-ctx.Done():
@@ -375,10 +392,19 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 			// Store image data for potential PDF generation
 			imageDataList = append(imageDataList, imageContent)
 
-			// Pass the page number (1-based index) to ProcessImage
-			result, err := provider.ProcessImage(ctx, imageContent, i+1)
-			if err != nil {
-				return nil, fmt.Errorf("error performing OCR for document %d, page %d: %w", documentID, i+1, err)
+			var result *ocr.OCRResult
+			if i < len(routes) && routes[i].UseTextLayer {
+				pageLogger.Infof("Using the page's own text layer instead of OCR (%s)", routes[i].Reason)
+				result = &ocr.OCRResult{
+					Text:     routes[i].Text,
+					Metadata: map[string]string{"provider": "text-layer", "page_routing": routes[i].Reason},
+				}
+			} else {
+				// Pass the page number (1-based index) to ProcessImage
+				result, err = provider.ProcessImage(ctx, imageContent, i+1)
+				if err != nil {
+					return nil, fmt.Errorf("error performing OCR for document %d, page %d: %w", documentID, i+1, err)
+				}
 			}
 			if result == nil {
 				pageLogger.Error("Got nil result from OCR provider")
@@ -763,40 +789,19 @@ func (app *App) uploadProcessedPDF(ctx context.Context, documentID int, pdfData 
 
 	logger.WithField("task_id", taskID).Info("PDF uploaded successfully")
 
-	// If replacing the original is requested, delete it after upload
+	// If replacing the original is requested, delete it after upload, but
+	// only once paperless-ngx has confirmed that the upload was imported.
+	// Deleting on anything less (status unreadable, still pending when we stop
+	// waiting) can leave neither the original nor the replacement.
 	if options.ReplaceOriginal {
-		// Poll for task completion
-		maxRetries := 12
-		waitTime := 5 * time.Second
-
 		logger.Info("Waiting for document processing to complete before deletion...")
-
-		for i := 0; i < maxRetries; i++ {
-			taskStatus, err := app.Client.GetTaskStatus(ctx, taskID)
-			if err != nil {
-				logger.WithError(err).Warn("Failed to check task status, proceeding with deletion anyway")
-				break
-			}
-
-			status, ok := taskStatus["status"].(string)
-			if !ok {
-				logger.Warn("Could not determine task status, proceeding with deletion anyway")
-				break
-			}
-
-			if strings.EqualFold(status, "SUCCESS") {
-				logger.Info("Document processing completed successfully")
-				break
-			}
-
-			if strings.EqualFold(status, "FAILURE") {
-				return fmt.Errorf("document processing failed, not deleting original document")
-			}
-
-			if i < maxRetries-1 {
-				logger.Infof("Document still processing (status: %s), waiting %v before checking again", status, waitTime)
-				time.Sleep(waitTime)
-			}
+		imported, reason, err := app.waitForImport(ctx, taskID, logger)
+		if err != nil {
+			return err
+		}
+		if !imported {
+			return &replaceAfterUploadError{cause: fmt.Errorf(
+				"paperless-ngx did not confirm the import of the searchable PDF (task %s: %s), so the original was kept; delete it once the new document shows up", taskID, reason)}
 		}
 
 		// Delete original document. The PDF is already uploaded at this point,
@@ -809,6 +814,44 @@ func (app *App) uploadProcessedPDF(ctx context.Context, documentID int, pdfData 
 	}
 
 	return nil
+}
+
+// waitForImport polls an upload task until paperless-ngx reports it done.
+// imported is true only for a SUCCESS status. A FAILURE status is returned as
+// an error; anything else (status unreadable, still pending when the wait
+// ends) returns imported=false with the reason, so the caller can keep data
+// it would otherwise delete.
+func (app *App) waitForImport(ctx context.Context, taskID string, logger *logrus.Entry) (imported bool, reason string, err error) {
+	reason = "still pending"
+	for attempt := 0; attempt < taskPollAttempts; attempt++ {
+		task, statusErr := app.Client.GetTaskStatus(ctx, taskID)
+		if statusErr != nil {
+			reason = fmt.Sprintf("status unavailable: %v", statusErr)
+		} else {
+			status, _ := task["status"].(string)
+			switch {
+			case strings.EqualFold(status, "SUCCESS"):
+				logger.Info("Document processing completed successfully")
+				return true, "", nil
+			case strings.EqualFold(status, "FAILURE"):
+				return false, "", fmt.Errorf("document processing failed, not deleting original document: %v", taskResultDetail(task))
+			case status == "":
+				reason = "status unknown"
+			default:
+				reason = "still " + strings.ToLower(status)
+			}
+		}
+		if attempt < taskPollAttempts-1 {
+			logger.Infof("Document not imported yet (%s), waiting %v before checking again", reason, taskPollInterval)
+			select {
+			case <-ctx.Done():
+				return false, ctx.Err().Error(), nil
+			case <-time.After(taskPollInterval):
+			}
+		}
+	}
+	logger.Warnf("paperless-ngx did not confirm the import (%s); keeping the original document", reason)
+	return false, reason, nil
 }
 
 // uploadProcessedPDFAsVersion adds the searchable PDF as a new version of the

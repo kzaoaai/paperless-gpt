@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"text/template"
@@ -367,6 +371,17 @@ func TestTokenLimitInTitleGeneration(t *testing.T) {
 	assert.LessOrEqual(t, len(tokens), 50, "Final prompt should be within token limit")
 }
 
+func TestGetSuggestedCreatedDateNormalizesYearFirstDate(t *testing.T) {
+	previous := createdDateTemplate
+	createdDateTemplate = template.Must(template.New("created_date").Parse("{{.Content}}"))
+	t.Cleanup(func() { createdDateTemplate = previous })
+
+	app := &App{LLM: &mockLLM{Response: "2023.01.01"}}
+	got, err := app.getSuggestedCreatedDate(context.Background(), "invoice dated 2023.01.01", "", logrus.WithField("test", t.Name()), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "2023-01-01", got)
+}
+
 func TestTokenLimitInCreatedDateGeneration(t *testing.T) {
 	testLogger := logrus.WithField("test", "test")
 
@@ -503,16 +518,21 @@ func (m *mockPaperlessClient) GetDocumentThumbnail(ctx context.Context, document
 func (m *mockPaperlessClient) SearchDocuments(ctx context.Context, query string, pageSize int) ([]Document, error) {
 	return nil, nil
 }
-func (m *mockPaperlessClient) FindDocumentIDsByReference(ctx context.Context, reference string, limit int) ([]int, error) {
+func (m *mockPaperlessClient) FindDocumentIDsByReference(ctx context.Context, reference string, excludeID, maxMatches int) ([]int, bool, error) {
 	m.ReferenceLookups = append(m.ReferenceLookups, reference)
 	if m.ReferenceError != nil {
-		return nil, m.ReferenceError
+		return nil, false, m.ReferenceError
 	}
-	ids := m.ReferenceMatches[reference]
-	if len(ids) > limit {
-		ids = ids[:limit]
+	var ids []int
+	for _, id := range m.ReferenceMatches[reference] {
+		if id != excludeID {
+			ids = append(ids, id)
+		}
 	}
-	return ids, nil
+	if len(ids) > maxMatches {
+		return nil, true, nil
+	}
+	return ids, false, nil
 }
 func (m *mockPaperlessClient) GetDocumentPageImage(ctx context.Context, documentID int, pageIndex int) ([]byte, error) {
 	return nil, nil
@@ -594,13 +614,9 @@ func TestGetSuggestedCustomFields(t *testing.T) {
 	}
 
 	// Create a dummy template file as loadTemplates() will be called
-	err := os.MkdirAll("prompts", 0755)
-	require.NoError(t, err)
-	err = os.WriteFile("prompts/custom_field_prompt.tmpl", []byte("test"), 0644)
-	require.NoError(t, err)
-	defer os.RemoveAll("prompts")
+	usePromptsSandbox(t, map[string]string{"custom_field_prompt.tmpl": "test"})
 
-	err = loadTemplates()
+	err := loadTemplates()
 	require.NoError(t, err)
 
 	// 2. Define Inputs
@@ -695,6 +711,22 @@ func TestGetSuggestedCustomFields_DocumentLink(t *testing.T) {
 			referenceMatches: map[string][]int{"0002058": {1, 2, 3, 4, 5, 6}},
 		},
 		{
+			name:             "reference without a digit is not a document identifier",
+			llmValue:         `["Zahlungsdiensteaufsichtsgesetz"]`,
+			referenceMatches: map[string][]int{"Zahlungsdiensteaufsichtsgesetz": {412}},
+		},
+		{
+			name:             "short number made of digits alone is not linked",
+			llmValue:         `["1772"]`,
+			referenceMatches: map[string][]int{"1772": {412}},
+		},
+		{
+			name:             "five-digit number is linked",
+			llmValue:         `["47110"]`,
+			referenceMatches: map[string][]int{"47110": {412}},
+			wantLinks:        []int{412},
+		},
+		{
 			name:             "too short reference is not looked up",
 			llmValue:         `["12"]`,
 			referenceMatches: map[string][]int{"12": {412}},
@@ -722,11 +754,7 @@ func TestGetSuggestedCustomFields_DocumentLink(t *testing.T) {
 			}
 			app := &App{LLM: llm, Client: client}
 
-			err := os.MkdirAll("prompts", 0755)
-			require.NoError(t, err)
-			err = os.WriteFile("prompts/custom_field_prompt.tmpl", []byte("{{ .CustomFieldsXML }}"), 0644)
-			require.NoError(t, err)
-			defer os.RemoveAll("prompts")
+			usePromptsSandbox(t, map[string]string{"custom_field_prompt.tmpl": "{{ .CustomFieldsXML }}"})
 			require.NoError(t, loadTemplates())
 
 			doc := Document{ID: currentDocID, Content: "Mahnung zu Rechnung R10927801"}
@@ -772,11 +800,7 @@ func TestGetSuggestedCustomFields_OnlySelectedFields(t *testing.T) {
 		},
 	}
 
-	err := os.MkdirAll("prompts", 0755)
-	require.NoError(t, err)
-	err = os.WriteFile("prompts/custom_field_prompt.tmpl", []byte("{{ .CustomFieldsXML }}"), 0644)
-	require.NoError(t, err)
-	defer os.RemoveAll("prompts")
+	usePromptsSandbox(t, map[string]string{"custom_field_prompt.tmpl": "{{ .CustomFieldsXML }}"})
 	require.NoError(t, loadTemplates())
 
 	suggestions, err := app.getSuggestedCustomFields(context.Background(), Document{Content: "x"}, []int{1}, logrus.WithField("test", t.Name()), nil)
@@ -785,6 +809,119 @@ func TestGetSuggestedCustomFields_OnlySelectedFields(t *testing.T) {
 	assert.NotContains(t, llm.lastPrompt, `name="Amount"`, "unselected fields must not be sent to the LLM")
 	require.Len(t, suggestions, 1)
 	assert.Equal(t, 1, suggestions[0].ID)
+}
+
+func TestParseCustomFieldLLMResponse(t *testing.T) {
+	known := []string{"Invoice Number", "Due Date"}
+
+	tests := []struct {
+		name   string
+		in     string
+		wantOK bool
+		want   []llmCustomFieldResponse
+	}{
+		{
+			name:   "empty is nothing found",
+			in:     "  \n",
+			wantOK: true,
+		},
+		{
+			name:   "array",
+			in:     `[{"field":"Invoice Number","value":"INV-1"},{"field":"Due Date","value":"2025-12-31"}]`,
+			wantOK: true,
+			want: []llmCustomFieldResponse{
+				{Field: "Invoice Number", Value: "INV-1"},
+				{Field: "Due Date", Value: "2025-12-31"},
+			},
+		},
+		{
+			name:   "single object",
+			in:     `{"field":"Invoice Number","value":"INV-1"}`,
+			wantOK: true,
+			want:   []llmCustomFieldResponse{{Field: "Invoice Number", Value: "INV-1"}},
+		},
+		{
+			name:   "map of known names",
+			in:     `{"invoice number":"INV-1","Due Date":"2025-12-31","Not Asked":"x"}`,
+			wantOK: true,
+			want: []llmCustomFieldResponse{
+				{Field: "Invoice Number", Value: "INV-1"},
+				{Field: "Due Date", Value: "2025-12-31"},
+			},
+		},
+		{
+			name:   "non-breaking space indentation",
+			in:     "[\n\u00a0 {\n\u00a0 \u00a0 \"field\": \"Invoice Number\",\n\u00a0 \u00a0 \"value\": \"9264\"\n\u00a0 }\n]",
+			wantOK: true,
+			want:   []llmCustomFieldResponse{{Field: "Invoice Number", Value: "9264"}},
+		},
+		{
+			name:   "latin-1 misread of a non-breaking space",
+			in:     "[\u00c2\u00a0{\"field\": \"Invoice Number\", \"value\": \"9264\"}]",
+			wantOK: true,
+			want:   []llmCustomFieldResponse{{Field: "Invoice Number", Value: "9264"}},
+		},
+		{
+			name:   "markdown fence",
+			in:     "```json\n[{\"field\":\"Invoice Number\",\"value\":\"INV-1\"}]\n```",
+			wantOK: true,
+			want:   []llmCustomFieldResponse{{Field: "Invoice Number", Value: "INV-1"}},
+		},
+		{
+			name:   "fence without a newline",
+			in:     "```json[{\"field\":\"Invoice Number\",\"value\":\"INV-1\"}]```",
+			wantOK: true,
+			want:   []llmCustomFieldResponse{{Field: "Invoice Number", Value: "INV-1"}},
+		},
+		{
+			name:   "prose is not usable",
+			in:     "I could not find any custom fields.",
+			wantOK: false,
+		},
+		{
+			name:   "map of unknown names is not usable",
+			in:     `{"Something Else":"x"}`,
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseCustomFieldLLMResponse(tt.in, known)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestGetSuggestedCustomFields_AcceptsObjectAndMap(t *testing.T) {
+	t.Setenv("TOKEN_LIMIT", "")
+	resetTokenLimit()
+
+	for _, response := range []string{
+		`{"field":"Invoice Number","value":"INV-1"}`,
+		`{"Invoice Number":"INV-1"}`,
+		"[\n\u00a0{\"field\":\"Invoice Number\",\"value\":\"INV-1\"}\n]",
+	} {
+		t.Run(response, func(t *testing.T) {
+			app := &App{
+				LLM: &mockLLM{Response: response},
+				Client: &mockPaperlessClient{
+					CustomFields: []CustomField{
+						{ID: 1, Name: "Invoice Number", DataType: "string"},
+					},
+				},
+			}
+			usePromptsSandbox(t, map[string]string{"custom_field_prompt.tmpl": "{{ .CustomFieldsXML }}"})
+			require.NoError(t, loadTemplates())
+
+			suggestions, err := app.getSuggestedCustomFields(context.Background(), Document{Content: "x"}, []int{1}, logrus.WithField("test", t.Name()), nil)
+			require.NoError(t, err)
+			require.Len(t, suggestions, 1)
+			assert.Equal(t, 1, suggestions[0].ID)
+			assert.Equal(t, "INV-1", suggestions[0].Value)
+		})
+	}
 }
 
 // Helper function to find a custom field by ID in a slice
@@ -928,5 +1065,82 @@ func TestHandoverTags(t *testing.T) {
 			assert.Equal(t, tt.wantRemove, remove)
 			assert.Equal(t, tt.wantAdd, add)
 		})
+	}
+}
+
+// A selected custom field may itself be called "field". A map reply for it
+// must not be mistaken for a single {"field": ..., "value": ...} object.
+func TestParseCustomFieldLLMResponseFieldNamedField(t *testing.T) {
+	got, ok := parseCustomFieldLLMResponse(`{"field":"INV-1","Due Date":"2025-12-31"}`, []string{"field", "Due Date"})
+	require.True(t, ok)
+	assert.Equal(t, []llmCustomFieldResponse{
+		{Field: "field", Value: "INV-1"},
+		{Field: "Due Date", Value: "2025-12-31"},
+	}, got)
+
+	got, ok = parseCustomFieldLLMResponse(`{"field":"field","value":"INV-1"}`, []string{"field"})
+	require.True(t, ok)
+	assert.Equal(t, []llmCustomFieldResponse{{Field: "field", Value: "INV-1"}}, got, "with both keys it is a single object")
+}
+
+func TestRawMessageByKeyIsDeterministic(t *testing.T) {
+	obj := map[string]json.RawMessage{"due date": json.RawMessage(`"a"`), "DUE DATE": json.RawMessage(`"b"`)}
+	for i := 0; i < 20; i++ {
+		raw, ok := rawMessageByKey(obj, "Due Date")
+		require.True(t, ok)
+		assert.Equal(t, `"b"`, string(raw), "sorted order: \"DUE DATE\" before \"due date\"")
+	}
+}
+
+// usePromptsSandbox runs the test in a temporary working directory with a
+// copy of default_prompts/ and the given prompt files. loadTemplates reads
+// and writes prompts/ relative to the working directory; running it in the
+// repository would overwrite, and the old cleanup delete, a developer's local
+// prompts and AI workflows.
+func usePromptsSandbox(t *testing.T, prompts map[string]string) {
+	t.Helper()
+	defaults, err := filepath.Abs("default_prompts")
+	require.NoError(t, err)
+	dir := t.TempDir()
+	require.NoError(t, os.CopyFS(filepath.Join(dir, "default_prompts"), os.DirFS(defaults)))
+	t.Chdir(dir)
+	require.NoError(t, os.MkdirAll("prompts", 0o755))
+	for name, content := range prompts {
+		require.NoError(t, os.WriteFile(filepath.Join("prompts", name), []byte(content), 0o644))
+	}
+}
+
+// A prompt in prompts/ that is still an earlier default was never customised
+// and gets the current default; a customised prompt is left alone.
+func TestLoadTemplatesUpdatesOutdatedDefaults(t *testing.T) {
+	const outdated = "an earlier default custom field prompt {{ .CustomFieldsXML }}"
+	sum := sha256.Sum256([]byte(outdated))
+	previous := previousDefaultPrompts
+	previousDefaultPrompts = map[string][]string{"custom_field_prompt.tmpl": {hex.EncodeToString(sum[:])}}
+	t.Cleanup(func() { previousDefaultPrompts = previous })
+
+	usePromptsSandbox(t, map[string]string{
+		"custom_field_prompt.tmpl": outdated,
+		"title_prompt.tmpl":        "my own title prompt {{ .Content }}",
+	})
+	require.NoError(t, loadTemplates())
+
+	current, err := os.ReadFile("default_prompts/custom_field_prompt.tmpl")
+	require.NoError(t, err)
+	got, err := os.ReadFile("prompts/custom_field_prompt.tmpl")
+	require.NoError(t, err)
+	assert.Equal(t, string(current), string(got), "the outdated default is replaced")
+
+	got, err = os.ReadFile("prompts/title_prompt.tmpl")
+	require.NoError(t, err)
+	assert.Equal(t, "my own title prompt {{ .Content }}", string(got), "a customised prompt is kept")
+}
+
+func TestPreviousDefaultPromptsAreForExistingPrompts(t *testing.T) {
+	for name, sums := range previousDefaultPrompts {
+		current, err := os.ReadFile(filepath.Join("default_prompts", name))
+		require.NoError(t, err, "history entry for a prompt that no longer exists: %s", name)
+		sum := sha256.Sum256(current)
+		assert.NotContains(t, sums, hex.EncodeToString(sum[:]), "%s: the current default must not be listed as outdated", name)
 	}
 }

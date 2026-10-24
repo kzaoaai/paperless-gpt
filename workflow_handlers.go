@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"text/template"
@@ -161,8 +162,23 @@ func (app *App) workflowDefaultsHandler(c *gin.Context) {
 			prompts[key] = string(content)
 		}
 	}
+	settingsMutex.RLock()
+	globalFieldIDs := slices.Clone(settings.CustomFieldsSelectedIDs)
+	settingsMutex.RUnlock()
+	customFieldsCacheMu.RLock()
+	fields := slices.Clone(customFieldsCache)
+	customFieldsCacheMu.RUnlock()
+	if fields == nil {
+		fields = []CustomField{}
+	}
+	if globalFieldIDs == nil {
+		globalFieldIDs = []int{}
+	}
 	c.JSON(http.StatusOK, gin.H{
+		"custom_fields":                 fields,
+		"custom_field_ids":              globalFieldIDs,
 		"auto_tag":                      autoTag,
+		"manual_tag":                    manualTag,
 		"auto_tag_complete":             app.autoTagComplete,
 		"storage_dir":                   workflows.dir,
 		"ocr_enabled":                   app.isOcrEnabled(),
@@ -208,6 +224,13 @@ func normalizeWorkflow(wf WorkflowConfig) WorkflowConfig {
 			delete(wf.Prompts, key)
 		}
 	}
+	var ids []int
+	for _, id := range wf.CustomFieldIDs {
+		if id > 0 && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	wf.CustomFieldIDs = ids
 	return wf
 }
 

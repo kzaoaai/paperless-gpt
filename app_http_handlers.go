@@ -113,7 +113,7 @@ func (app *App) getAllTagsHandler(c *gin.Context) {
 // getSettingsHandler handles the GET /api/settings endpoint
 func (app *App) getSettingsHandler(c *gin.Context) {
 	// Refresh the cache when settings are requested
-	go refreshCustomFieldsCache(app.Client)
+	go refreshCustomFieldsCache(context.Background(), app.Client)
 
 	settingsMutex.RLock()
 	defer settingsMutex.RUnlock()
@@ -157,7 +157,7 @@ func (app *App) getCustomFieldsHandler(c *gin.Context) {
 	// Check for "force_pull" query parameter
 	if forcePull := c.Query("force_pull"); forcePull == "true" {
 		// Force a refresh of the custom fields cache
-		go refreshCustomFieldsCache(app.Client)
+		go refreshCustomFieldsCache(context.Background(), app.Client)
 	}
 
 	customFieldsCacheMu.RLock()
@@ -309,6 +309,23 @@ func (app *App) updateDocumentsHandler(c *gin.Context) {
 	}
 
 	err := app.Client.UpdateDocuments(ctx, documents, app.Database, false)
+	if err == nil || errors.As(err, new(*PartialUpdateError)) {
+		clearPendingReviews(app.Database, documents)
+	}
+	var partial *PartialUpdateError
+	if errors.As(err, &partial) {
+		// The update went through without some fields. Reporting it as a
+		// failure would tell the user nothing was applied; flag the document
+		// for review like the background processor does, and say what was
+		// left out.
+		applyFailTagAfterPartialSuccess(ctx, app.Client, app.Database, partial.DocumentID, partial.DroppedFields)
+		c.JSON(http.StatusOK, gin.H{"partial": gin.H{
+			"document_id":    partial.DocumentID,
+			"dropped_fields": partial.DroppedFields,
+			"fail_tag":       failTag,
+		}})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error updating documents: %v", err)})
 		log.Errorf("Error updating documents: %v", err)

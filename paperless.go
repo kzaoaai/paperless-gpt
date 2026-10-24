@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -80,8 +81,29 @@ type DocumentType struct {
 // The stored spelling is returned alongside the id so callers record what
 // paperless-ngx actually holds rather than the user's variant.
 func lookupTagID(availableTags map[string]int, tagName string) (string, int, bool) {
-	if tagID, exists := availableTags[tagName]; exists {
-		return tagName, tagID, true
+	return lookupNamedID("Tag", availableTags, tagName)
+}
+
+// isNoMatchCorrespondent recognizes explicit no-match values from the
+// correspondent prompt. They must never become real correspondents.
+func isNoMatchCorrespondent(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "unknown", "unbekannt", "none", "n/a", "no correspondent":
+		return true
+	default:
+		return false
+	}
+}
+
+// lookupNamedID finds a tag, correspondent or document type by name the way
+// paperless-ngx compares names: case-insensitively, so "MONTANA GmbH" finds
+// an existing "Montana GmbH" instead of trying to create a duplicate that
+// paperless-ngx rejects. An exact match wins; among case variants the lowest
+// id wins.
+func lookupNamedID(kind string, available map[string]int, name string) (string, int, bool) {
+	name = strings.TrimSpace(name)
+	if id, exists := available[name]; exists {
+		return name, id, true
 	}
 
 	// GetAllTags keys this map by the exact name paperless-ngx returned, so a
@@ -93,21 +115,21 @@ func lookupTagID(availableTags map[string]int, tagName string) (string, int, boo
 	// duplicate -- exactly what the CREATE_NEW_TAGS path used to mint -- sorts
 	// after it.
 	matchedName, matchedID, matches := "", 0, 0
-	for availableName, tagID := range availableTags {
-		if !strings.EqualFold(availableName, tagName) {
+	for availableName, id := range available {
+		if !strings.EqualFold(availableName, name) {
 			continue
 		}
 		matches++
-		if matches == 1 || tagID < matchedID {
-			matchedName, matchedID = availableName, tagID
+		if matches == 1 || id < matchedID {
+			matchedName, matchedID = availableName, id
 		}
 	}
 	if matches == 0 {
 		return "", 0, false
 	}
 	if matches > 1 {
-		log.Warnf("Tag %q matches %d tags in paperless-ngx that differ only by case; using %q (id %d). Merge the duplicates to make this unambiguous.",
-			tagName, matches, matchedName, matchedID)
+		log.Warnf("%s %q matches %d entries in paperless-ngx that differ only by case; using %q (id %d). Merge the duplicates to make this unambiguous.",
+			kind, name, matches, matchedName, matchedID)
 	}
 	return matchedName, matchedID, true
 }
@@ -244,7 +266,11 @@ func (client *PaperlessClient) Do(ctx context.Context, method, path string, body
 // GetAllTags retrieves all tags from the Paperless-NGX API
 func (client *PaperlessClient) GetAllTags(ctx context.Context) (map[string]int, error) {
 	tagIDMapping := make(map[string]int)
-	path := "api/tags/"
+	// Paperless defaults to 25 results per page. This helper is used during
+	// startup for marker-tag checks, so asking for a larger page size avoids
+	// hundreds of slow round trips on installations with large tag catalogs.
+	// Pagination is still followed because the server may cap page_size.
+	path := "api/tags/?page_size=1000"
 
 	for path != "" {
 		resp, err := client.Do(ctx, "GET", path, nil)
@@ -462,6 +488,10 @@ func (client *PaperlessClient) GetDocumentThumbnail(ctx context.Context, documen
 	return data, contentType, nil
 }
 
+// ErrDocumentNotFound is returned by GetDocument when paperless-ngx answers
+// 404: the document was deleted, or the API user can't see it.
+var ErrDocumentNotFound = errors.New("document not found")
+
 func (client *PaperlessClient) GetDocument(ctx context.Context, documentID int) (Document, error) {
 	// TODO: This function can be optimized by caching the results of GetAllTags, GetAllCorrespondents, and GetCustomFields.
 	// A simple time-based cache could be implemented in the PaperlessClient to avoid fetching this data on every call.
@@ -472,6 +502,9 @@ func (client *PaperlessClient) GetDocument(ctx context.Context, documentID int) 
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return Document{}, fmt.Errorf("error fetching document %d: %w", documentID, ErrDocumentNotFound)
+	}
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return Document{}, fmt.Errorf("error fetching document %d: %d, %s", documentID, resp.StatusCode, string(bodyBytes))
@@ -623,7 +656,7 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 	// when at least one document has suggested custom fields, so users who
 	// don't use the feature pay nothing. Used to normalize monetary values
 	// at the API boundary so paperless-ngx's validator accepts them
-	// (see normalize_monetary.go).
+	// (see normalize_monetary.go), and to skip values it would reject.
 	var customFieldTypes map[int]string
 	for _, d := range documents {
 		if len(d.SuggestedCustomFields) > 0 {
@@ -695,7 +728,16 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 			if document.KeepOriginalTags {
 				finalTagNames = append(finalTagNames, document.SuggestedTags...)
 			} else {
-				finalTagNames = document.SuggestedTags
+				finalTagNames = append([]string{}, document.SuggestedTags...)
+				// Suggestions never contain paperless-gpt's own tags (they are
+				// filtered out of the LLM's view), so replacing the tags with
+				// them used to drop PDF_OCR_COMPLETE_TAG, AUTO_TAG_COMPLETE,
+				// FAIL_TAG or a workflow's completion tag already on the
+				// document (#1156). Keep those. An undo restores an exact
+				// earlier state.
+				if !isUndo {
+					finalTagNames = append(finalTagNames, keptSystemTags(originalDoc.Tags)...)
+				}
 			}
 		}
 		var cleanedTags []string
@@ -780,28 +822,41 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		// wins over the suggestion. That leaves paperless-ngx' own classifier (or
 		// a manual correction) in charge and limits the LLM to documents that do
 		// not have a correspondent yet.
-		if document.SuggestedCorrespondent != "" && document.SuggestedCorrespondent != originalDoc.Correspondent &&
+		if document.SuggestedCorrespondent != "" && !strings.EqualFold(strings.TrimSpace(document.SuggestedCorrespondent), originalDoc.Correspondent) &&
 			!(preserveExistingMetadata && originalDoc.Correspondent != "") {
-			originalFields["correspondent"] = originalDoc.Correspondent
-			if corrID, exists := availableCorrespondents[document.SuggestedCorrespondent]; exists {
+			if isNoMatchCorrespondent(document.SuggestedCorrespondent) {
+				// The correspondent prompt answers "Unknown" when nothing fits.
+				// That is a valid answer meaning "no correspondent", not a
+				// failure: leave the correspondent alone and do not flag the
+				// document, and never create a correspondent named "Unknown".
+				log.Infof("Document %d: no correspondent found (%q), leaving it unchanged", documentID, strings.TrimSpace(document.SuggestedCorrespondent))
+			} else if _, corrID, exists := lookupNamedID("Correspondent", availableCorrespondents, document.SuggestedCorrespondent); exists {
+				originalFields["correspondent"] = originalDoc.Correspondent
 				updatedFields["correspondent"] = corrID
 			} else {
-				newCorr := instantiateCorrespondent(document.SuggestedCorrespondent)
+				newCorr := instantiateCorrespondent(strings.TrimSpace(document.SuggestedCorrespondent))
 				newCorrID, err := client.CreateOrGetCorrespondent(ctx, newCorr)
 				if err != nil {
-					return fmt.Errorf("error creating correspondent '%s': %w", document.SuggestedCorrespondent, err)
+					// Losing the correspondent must not cost the title, tags
+					// and everything else: apply the rest and flag the document
+					// like any other field paperless-ngx rejected. A typical
+					// cause is a correspondent the API user cannot see.
+					log.Warnf("Document %d: could not use correspondent %q, applying the other changes without it: %v", documentID, document.SuggestedCorrespondent, err)
+					partialDroppedFields = append(partialDroppedFields, "correspondent")
+				} else {
+					originalFields["correspondent"] = originalDoc.Correspondent
+					updatedFields["correspondent"] = newCorrID
 				}
-				updatedFields["correspondent"] = newCorrID
 			}
 		}
 
 		// --- DOCUMENT TYPE ---
 		// Same as above: an existing document type is kept when
 		// PRESERVE_EXISTING_METADATA is enabled.
-		if document.SuggestedDocumentType != "" && document.SuggestedDocumentType != originalDoc.DocumentTypeName &&
+		if document.SuggestedDocumentType != "" && !strings.EqualFold(strings.TrimSpace(document.SuggestedDocumentType), originalDoc.DocumentTypeName) &&
 			!(preserveExistingMetadata && originalDoc.DocumentTypeName != "") {
 			originalFields["document_type"] = originalDoc.DocumentTypeName
-			if docTypeID, exists := availableDocumentTypes[document.SuggestedDocumentType]; exists {
+			if _, docTypeID, exists := lookupNamedID("Document type", availableDocumentTypes, document.SuggestedDocumentType); exists {
 				updatedFields["document_type"] = docTypeID
 			} else {
 				// Unlike correspondents, we don't create new document types - only use existing ones
@@ -825,16 +880,20 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 			// Validate that the date is a real Gregorian calendar date, not just
 			// a correctly-formatted string. time.Parse rejects impossible dates
 			// like "2023-01-79" (day 79) that the regex `^\d{4}-\d{2}-\d{2}$`
-			// would accept. Dropped pre-flight rather than after a 400 to avoid
-			// an unnecessary round-trip. A date the model cannot produce is a
-			// deterministic outcome — retrying the document will yield the same
-			// answer every time — so the field is skipped like an empty
-			// suggestion, not recorded as a dropped field for the fail tag.
-			// The fail tag stays reserved for fields paperless-ngx actually
-			// rejected.
-			if _, err := time.Parse("2006-01-02", suggestedCreatedDate); err == nil {
+			// would accept. Year-first dates written with dots or slashes, or
+			// with a trailing time, are rewritten to YYYY-MM-DD first: that is
+			// the only format paperless-ngx accepts, and a dotted date used to
+			// be dropped here after the model had already found the right day.
+			// Dropped pre-flight rather than after a 400 to avoid an unnecessary
+			// round-trip. A date the model cannot produce is a deterministic
+			// outcome — retrying the document will yield the same answer every
+			// time — so the field is skipped like an empty suggestion, not
+			// recorded as a dropped field for the fail tag. The fail tag stays
+			// reserved for fields paperless-ngx actually rejected.
+			normalizedCreatedDate := normalizeCreatedDate(suggestedCreatedDate)
+			if _, err := time.Parse("2006-01-02", normalizedCreatedDate); err == nil {
 				originalFields["created_date"] = document.OriginalDocument.CreatedDate
-				updatedFields["created_date"] = suggestedCreatedDate
+				updatedFields["created_date"] = normalizedCreatedDate
 			} else {
 				log.Warnf("Document %d: created_date %q is not a valid calendar date, skipping. (%v)", documentID, suggestedCreatedDate, err)
 			}
@@ -847,7 +906,25 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		}
 
 		// --- CUSTOM FIELDS ---
-		if len(document.SuggestedCustomFields) > 0 {
+		// Normalize each suggested value for its field's data type, then drop
+		// the ones paperless-ngx would reject anyway. One invalid value makes
+		// paperless-ngx refuse the whole PATCH, so it is skipped here like the
+		// created date above: pre-flight, with a warning, and not recorded as
+		// a dropped field for the fail tag. A typical case is an impossible
+		// date the document itself prints ("pay by 2026-09-31"): the model
+		// copies it faithfully and will do so on every retry.
+		var suggestedCustomFields []CustomFieldSuggestion
+		for _, sf := range document.SuggestedCustomFields {
+			dataType := customFieldTypes[sf.ID]
+			value := normalizeCustomFieldValue(dataType, sf.Value)
+			if err := validateCustomFieldValue(dataType, value); err != nil {
+				log.Warnf("Document %d: custom field %q (id %d) value %v is not valid for its %s type, skipping. (%v)", documentID, sf.Name, sf.ID, sf.Value, dataType, err)
+				continue
+			}
+			sf.Value = value
+			suggestedCustomFields = append(suggestedCustomFields, sf)
+		}
+		if len(suggestedCustomFields) > 0 {
 			log.Infof("Processing custom fields for document %d with mode: '%s'", documentID, document.CustomFieldsWriteMode)
 
 			// append and update merge the suggestion into the document's
@@ -878,21 +955,19 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 			switch document.CustomFieldsWriteMode {
 			case "replace":
 				finalCustomFields = []CustomFieldResponse{}
-				for _, sf := range document.SuggestedCustomFields {
-					value := normalizeCustomFieldValue(customFieldTypes[sf.ID], sf.Value)
-					finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: value})
+				for _, sf := range suggestedCustomFields {
+					finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: sf.Value})
 				}
 			case "update":
 				existingFieldsMap := make(map[int]*CustomFieldResponse)
 				for i := range finalCustomFields {
 					existingFieldsMap[finalCustomFields[i].Field] = &finalCustomFields[i]
 				}
-				for _, sf := range document.SuggestedCustomFields {
-					value := normalizeCustomFieldValue(customFieldTypes[sf.ID], sf.Value)
+				for _, sf := range suggestedCustomFields {
 					if ef, ok := existingFieldsMap[sf.ID]; ok {
-						ef.Value = value
+						ef.Value = sf.Value
 					} else {
-						finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: value})
+						finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: sf.Value})
 					}
 				}
 			case "append":
@@ -900,10 +975,9 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 				for _, f := range finalCustomFields {
 					existingFieldsMap[f.Field] = true
 				}
-				for _, sf := range document.SuggestedCustomFields {
+				for _, sf := range suggestedCustomFields {
 					if _, exists := existingFieldsMap[sf.ID]; !exists {
-						value := normalizeCustomFieldValue(customFieldTypes[sf.ID], sf.Value)
-						finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: value})
+						finalCustomFields = append(finalCustomFields, CustomFieldResponse{Field: sf.ID, Value: sf.Value})
 					}
 				}
 			}
@@ -964,6 +1038,12 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 					updatedFields["tags"] = []int{}
 				}
 			} else {
+				// Nothing to send, but a suggestion was dropped (e.g. a
+				// correspondent that could not be created): report it so the
+				// caller flags the document instead of treating it as done.
+				if len(partialDroppedFields) > 0 && firstPartial == nil {
+					firstPartial = &PartialUpdateError{DocumentID: documentID, DroppedFields: partialDroppedFields}
+				}
 				continue
 			}
 		}
@@ -1183,10 +1263,12 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 // Returns (nil, nil, false) if the body cannot be parsed as the expected
 // shape; the caller treats this as a hard failure too.
 //
-// Example paperless-ngx 400 body this parser handles:
+// Example paperless-ngx 400 bodies this parser handles:
 //
 //	{"created_date":["Date has wrong format..."],
 //	 "custom_fields":[{},{},{},{},{},{"non_field_errors":["..."]},{},{}]}
+//
+//	{"custom_fields":{"2":{"non_field_errors":["Date has wrong format..."]}}}
 func parsePaperlessValidationErrors(body []byte) (scalarFields map[string]bool, customFieldIndices []int, unrecoverable bool) {
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -1202,18 +1284,36 @@ func parsePaperlessValidationErrors(body []byte) (scalarFields map[string]bool, 
 			unrecoverable = true
 			return
 		case "custom_fields":
-			arr, ok := val.([]any)
-			if !ok {
+			switch errs := val.(type) {
+			case []any:
+				for i, entry := range errs {
+					obj, ok := entry.(map[string]any)
+					if !ok || len(obj) == 0 {
+						continue
+					}
+					customFieldIndices = append(customFieldIndices, i)
+				}
+			case map[string]any:
+				// Newer paperless-ngx versions report only the failing
+				// entries, keyed by their index in the custom_fields array.
+				for key, entry := range errs {
+					i, err := strconv.Atoi(key)
+					if err != nil || i < 0 {
+						// Not an index (e.g. a list-level error) — bail to
+						// the hard-failure path.
+						unrecoverable = true
+						return
+					}
+					if obj, ok := entry.(map[string]any); ok && len(obj) == 0 {
+						continue
+					}
+					customFieldIndices = append(customFieldIndices, i)
+				}
+				slices.Sort(customFieldIndices)
+			default:
 				// Unexpected shape — bail to hard-failure path.
 				unrecoverable = true
 				return
-			}
-			for i, entry := range arr {
-				obj, ok := entry.(map[string]any)
-				if !ok || len(obj) == 0 {
-					continue
-				}
-				customFieldIndices = append(customFieldIndices, i)
 			}
 		default:
 			scalarFields[key] = true
@@ -1366,7 +1466,7 @@ func describeDownload(data []byte) string {
 
 // DownloadDocumentAsImages downloads the specified document and converts it to images.
 // Single images pass through as one page; other non-PDF downloads fail with a
-// descriptive error instead of a fitz failure.
+// descriptive error instead of a PDF parsing failure.
 // If limitPages > 0, only the first N pages will be processed
 // Returns the image paths and the total number of pages in the original document
 func (client *PaperlessClient) DownloadDocumentAsImages(ctx context.Context, documentID int, limitPages int) ([]string, int, error) {
@@ -1772,8 +1872,9 @@ func (client *PaperlessClient) CreateOrGetCorrespondent(ctx context.Context, cor
 		return 0, fmt.Errorf("error fetching correspondents: %w", err)
 	}
 
-	// Check if correspondent already exists
-	if id, exists := correspondents[correspondent.Name]; exists {
+	// Check if correspondent already exists; paperless-ngx names are unique
+	// regardless of case.
+	if _, id, exists := lookupNamedID("Correspondent", correspondents, correspondent.Name); exists {
 		log.Infof("Using existing correspondent with name %s and ID %d", correspondent.Name, id)
 		return id, nil
 	}
@@ -2210,4 +2311,24 @@ func (client *PaperlessClient) UploadDocumentVersion(ctx context.Context, docume
 
 	log.Infof("Successfully uploaded new version of document %d, received task ID: %s", documentID, taskID)
 	return taskID, nil
+}
+
+// keptSystemTags returns the tags in names that record a state paperless-gpt
+// set and suggestions must not erase: PDF_OCR_COMPLETE_TAG, FAIL_TAG,
+// AUTO_TAG_COMPLETE and AI workflow completion tags, compared
+// case-insensitively. Trigger tags (MANUAL_TAG, AUTO_TAG, AUTO_OCR_TAG,
+// workflow triggers) are not kept: replacing the tags has always taken them
+// off, and callers rely on that.
+func keptSystemTags(names []string) []string {
+	markers := []string{pdfOCRCompleteTag, failTag, autoTagComplete}
+	for _, wf := range workflows.List() {
+		markers = append(markers, wf.CompletionTag)
+	}
+	var kept []string
+	for _, name := range names {
+		if slices.ContainsFunc(markers, func(t string) bool { return t != "" && strings.EqualFold(t, name) }) {
+			kept = append(kept, name)
+		}
+	}
+	return kept
 }

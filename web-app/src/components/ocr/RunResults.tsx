@@ -263,7 +263,7 @@ const RunResults: React.FC<RunResultsProps> = ({
       {selectedRun.pdf_action === "versioned" && selectedRun.pdf_detail && (
         <p className="mt-2 flex items-center gap-1.5 text-sm text-warn">
           <ExclamationTriangleIcon className="h-4 w-4" aria-hidden="true" />
-          A searchable PDF was added as a new version of this document during this run. {selectedRun.pdf_detail}
+          {selectedRun.pdf_detail}
         </p>
       )}
       {selectedRun.pdf_action === "kept" && (

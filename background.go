@@ -233,7 +233,7 @@ func (app *App) processTagDocuments(ctx context.Context, triggerTag string) (int
 	}
 
 	// Refresh the custom fields cache before processing, as we have documents
-	refreshCustomFieldsCache(app.Client)
+	refreshCustomFieldsCache(ctx, app.Client)
 
 	log.Debugf("Found at least %d remaining documents with tag %s", len(documents), triggerTag)
 
@@ -335,6 +335,18 @@ func (app *App) processTagDocuments(ctx context.Context, triggerTag string) (int
 		// Suggestions came back — a previous failure streak is over, whatever
 		// the update below does.
 		app.suggestionFailures.reset(document.ID)
+
+		if workflow != nil && workflow.RequireApproval && len(suggestions) == 1 {
+			if err := app.holdForApproval(ctx, document, suggestions[0], *workflow, triggerTag, docLogger); err != nil {
+				docLogger.Error(err.Error())
+				errs = append(errs, err)
+				app.Database.Delete(&PendingReview{}, document.ID)
+				recoverFromFailedUpdate(ctx, app.Client, app.Database, document, triggerTag)
+				continue
+			}
+			processedCount++
+			continue
+		}
 
 		err = app.Client.UpdateDocuments(ctx, suggestions, app.Database, false)
 		if err != nil {
