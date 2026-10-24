@@ -85,6 +85,18 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     in relaxed mode (its default), up to v0.16.1. The original is never changed, and
     `checkRebuiltPDF` still compares against it. Called in `DownloadDocumentAsPDF`
     (`paperless.go`) and `ProcessDocumentOCR` (`ocr.go`). Tests: `pdf_normalize_test.go`.
+  - `GOOGLEAI_BACKEND=vertex` sends the googleai LLM and vision calls to Vertex AI with
+    Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`) instead of an API key;
+    project from `GOOGLEAI_VERTEX_PROJECT` or `GOOGLE_PROJECT_ID`, location
+    `GOOGLEAI_VERTEX_LOCATION` (default `global`; `GOOGLE_LOCATION` is Document AI's `us`/`eu`
+    and is deliberately not a fallback). Both providers build their client with
+    `ocr.NewGenAIClient` (`ocr/google_ai_client.go`); upstream edits to either provider's
+    `genai.NewClient` call will conflict here. The three variables are in `env_registry.go` and
+    the README table. Tests: `TestGenAIClientConfig`.
+  - The Dockerfile's builder stage pins `MUSL_DEV_VERSION="1.2.6-r3"`. Alpine 3.24 dropped
+    `-r2`, which upstream still pins, so its `apk add` fails and no image builds. On a conflict,
+    take whichever version the current Alpine repo serves; when upstream's Renovate catches up,
+    take theirs and drop this item.
 
 ### Production invariants (config, not code)
 
@@ -122,13 +134,22 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   no completion tag and so no `AI`, by choice.
 - `MANUAL_TAG` equals `AUTO_TAG` on purpose: it is the only tag left out of the LLM's tag
   candidates, so the model can never suggest the tag that triggers the LLM stage.
+- The LLM runs on Vertex AI (`GOOGLEAI_BACKEND=vertex`, `LLM_MODEL=gemini-3-flash-preview`), so
+  it bills as Cloud usage, which the Developer Program credit covers, not as AI Studio prepay,
+  which ran out and fail-tagged documents with 402 on 2026-10-23. `GOOGLEAI_API_KEY` is commented
+  out. `gemini-2.5-flash` and `2.5-flash-lite` return 404 on Vertex for this project. Flash-Lite
+  models were measured worse (wrong created dates, invented amounts, wrong tags), so they are not
+  a cost saving worth taking.
 
 ### Open items
 
-- Production runs `0e8da29` (deployed 2026-10-11): the `normalizePDF` retry and CropBox import.
-  Verified live on an iOS scan with a CropBox (manual job, PDF action `versioned`): the new page
-  has the CropBox's size, and the text layer's words sit over the printed words, so Document
-  AI's hOCR of such a page describes the CropBox.
+- Production runs `136277a` (deployed 2026-10-24): the Vertex backend, on Vertex with
+  `gemini-3-flash-preview`. Verified by re-running one document with no API key in the container.
+  Not yet verified: that the Developer Program credit absorbs the Vertex charges (Cloud billing
+  reports).
+- `0e8da29`'s CropBox import was verified live on an iOS scan with a CropBox (manual job, PDF
+  action `versioned`): the new page has the CropBox's size, and the text layer's words sit over
+  the printed words, so Document AI's hOCR of such a page describes the CropBox.
 - The OCR page's `auto_queue_count` counts every document tagged with `AUTO_OCR_TAG`, including
   paperless-ngx version rows (auto-matching stamps the tag on them) and trashed documents, so it
   overstates the queue (85 tagged, none of them a live root document, on 2026-10-11). The auto
