@@ -145,8 +145,9 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 
 ### Open items
 
-- Production runs `136277a` (deployed 2026-10-24): the Vertex backend, on Vertex with
-  `gemini-3-flash-preview`. Verified by re-running one document with no API key in the container.
+- Production runs `9068471` (deployed 2026-10-25): the 2026-10-25 upstream sync on top of the
+  Vertex backend, on Vertex with `gemini-3-flash-preview`. Verified by re-running one document's
+  LLM stage (title, tags, custom fields and the `AI` workflow all applied, no fail tag).
   Not yet verified: that the Developer Program credit absorbs the Vertex charges (Cloud billing
   reports).
 - `0e8da29`'s CropBox import was verified live on an iOS scan with a CropBox (manual job, PDF
