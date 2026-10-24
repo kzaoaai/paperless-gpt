@@ -43,11 +43,13 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     `CreatedDate`. Upstream lacks it; production's custom created-date prompt depends on it,
     and a missing map key renders as empty with no error. Guarded by
     `TestCreatedDatePromptReceivesOriginalCreatedDate`.
-  - `PDF_UPLOAD_MODE=version` (upstream PR icereed/paperless-gpt#1125, open): `UploadDocumentVersion` in `paperless.go`,
-    `uploadProcessedPDFAsVersion` and `versionUnconfirmedError` in `ocr.go`, `UploadMode` on
-    `OCROptions`/`OCRRun`, and the Playground/Activity wording in `web-app/src/components/ocr/`.
-    Tests: `ocr_version_upload_test.go`. Upstream edits to `uploadProcessedPDF` or
-    `ProcessDocumentOCR`'s upload switch will conflict here.
+  - `PDF_UPLOAD_MODE=version` is upstream since icereed/paperless-gpt#1125 (synced 2026-10-25).
+    The fork keeps three additions on top of it: `VersionAdded` on `ProcessedDocument` (set
+    when the version is confirmed; `saveVersionText` below depends on it), the `kept` PDF action
+    (Go, `api.ts`, `RunResults.tsx`, the Activity tab), and a five-minute version wait
+    (`taskPollAttempts = 60`; upstream waits one minute; guarded by
+    `TestVersionWaitOutlastsABusyWorker`). Upstream edits to `ProcessDocumentOCR`'s upload
+    switch or the task-poll constants will conflict here.
   - Once paperless-ngx confirms a new version (`ProcessedDocument.VersionAdded`),
     `saveVersionText` (`version_text.go`) writes the recognized text into the new version and
     into the original, content only (`SetDocumentContent`, `paperless.go`). A new version's
@@ -159,8 +161,6 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   `gdocai` does not keep it in the hOCR. Not requested.
 - The gofpdi fix is not offered upstream (phpdave11/gofpdi, inactive), by AA's choice; the
   `replace` stays until upstream fixes `ImportPage`/`UseTemplate`.
-- `PDF_UPLOAD_MODE=version` is upstream PR icereed/paperless-gpt#1125 (open). Once it merges,
-  drop it from the sync checklist above.
 - `new` upload mode still copies no `document_type`, `custom_fields`, `storage_path` or
   `archive_serial_number` to the new document (`uploadProcessedPDF`, `ocr.go`); `version`
   mode avoids the problem because metadata never leaves the document.
@@ -174,6 +174,10 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   need a human anyway, and an empty answer can also mean a safety block or exhausted output
   tokens. If it ever hits a real document: put the candidate's `FinishReason` in the error, and
   treat an empty answer as "no tags" only in the tag step and only when it is `STOP`.
+  Upstream's empty-reply fix (2026-10 sync) covers only langchaingo's Anthropic and OpenAI
+  errors, not this provider. Since the same sync the googleai provider runs behind
+  `RateLimitedLLM`, so each empty answer is retried `LLM_MAX_RETRIES` (3) times within one
+  suggestion call before it counts against `AUTO_TAG_MAX_RETRIES`.
 - `pdf` mode could send non-PDF originals to one whole-document OCR call (as `whole_pdf`
   does) instead of failing. Currently handled by the workflow routing above.
 - A version paperless-ngx has not confirmed within 5 minutes keeps paperless-ngx's own
