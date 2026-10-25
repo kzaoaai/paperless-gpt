@@ -42,7 +42,8 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   - `getSuggestedCreatedDate` passes the document's current created date as template key
     `CreatedDate`. Upstream lacks it; production's custom created-date prompt depends on it,
     and a missing map key renders as empty with no error. Guarded by
-    `TestCreatedDatePromptReceivesOriginalCreatedDate`.
+    `TestCreatedDatePromptReceivesOriginalCreatedDate`. Offered upstream as icereed/paperless-gpt#1226
+    (open); once it merges, take upstream's version and drop this item.
   - `PDF_UPLOAD_MODE=version` is upstream since icereed/paperless-gpt#1125 (synced 2026-10-25).
     The fork keeps three additions on top of it: `VersionAdded` on `ProcessedDocument` (set
     when the version is confirmed; `saveVersionText` below depends on it), the `kept` PDF action
@@ -94,11 +95,12 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     and is deliberately not a fallback). Both providers build their client with
     `ocr.NewGenAIClient` (`ocr/google_ai_client.go`); upstream edits to either provider's
     `genai.NewClient` call will conflict here. The three variables are in `env_registry.go` and
-    the README table. Tests: `TestGenAIClientConfig`.
+    the README table. Tests: `TestGenAIClientConfig`. Offered upstream as
+    icereed/paperless-gpt#1225 (open); once it merges, take upstream's version and drop this item.
   - The Dockerfile's builder stage pins `MUSL_DEV_VERSION="1.2.6-r3"`. Alpine 3.24 dropped
     `-r2`, which upstream still pins, so its `apk add` fails and no image builds. On a conflict,
     take whichever version the current Alpine repo serves; when upstream's Renovate catches up,
-    take theirs and drop this item.
+    take theirs and drop this item. Offered upstream as icereed/paperless-gpt#1224 (open).
 
 ### Production invariants (config, not code)
 
