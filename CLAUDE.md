@@ -152,8 +152,9 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 
 ### Open items
 
-- Production runs `9068471` (deployed 2026-10-25): the 2026-10-25 upstream sync on top of the
-  Vertex backend, on Vertex with `gemini-3-flash-preview`. Verified by re-running one document's
+- Production runs `30ac1b1` (deployed 2026-10-31) with `GOOGLEAI_THINKING_LEVEL=low`; before it,
+  `9068471` (deployed 2026-10-25): the 2026-10-25 upstream sync on top of the Vertex backend, on
+  Vertex with `gemini-3-flash-preview`. Verified by re-running one document's
   LLM stage (title, tags, custom fields and the `AI` workflow all applied, no fail tag).
   The Developer Program credit does absorb Vertex charges: October 2026's report shows $9.66 of
   it against $15.70 of Vertex usage, almost all from the 2026-10-31 document-link backfill
@@ -161,8 +162,8 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 - Thinking tokens are most of the cost: on 8 documents the custom-field prompt averaged ~2,400
   thinking tokens per call at the model's default level ($0.0094 a call) against ~0 at `low`
   ($0.0027, 71% less, about 5× faster). Answers at `low` were close; it fills `Amount` a little
-  more readily (a loan estimate's loan amount, an insurance premium). `GOOGLEAI_THINKING_LEVEL`
-  exists for this; production does not set it yet.
+  more readily (a loan estimate's loan amount, an insurance premium). Production sets
+  `GOOGLEAI_THINKING_LEVEL=low` since 2026-10-31.
 - `0e8da29`'s CropBox import was verified live on an iOS scan with a CropBox (manual job, PDF
   action `versioned`): the new page has the CropBox's size, and the text layer's words sit over
   the printed words, so Document AI's hOCR of such a page describes the CropBox.
