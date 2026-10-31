@@ -1360,7 +1360,7 @@ func createLLM() (llms.Model, error) {
 				}
 			}
 		}
-		provider, err := NewGoogleAIProvider(ctx, llmModel, apiKey, thinkingBudget)
+		provider, err := NewGoogleAIProvider(ctx, llmModel, apiKey, thinkingBudget, os.Getenv("GOOGLEAI_THINKING_LEVEL"))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create GoogleAI provider: %w", err)
 		}

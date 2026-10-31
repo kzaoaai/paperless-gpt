@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"paperless-gpt/ocr"
+	"strings"
 
 	"github.com/tmc/langchaingo/llms"
 	"google.golang.org/genai"
@@ -13,11 +14,14 @@ import (
 type GoogleAIProvider struct {
 	client         *genai.Client
 	thinkingBudget *int32
+	thinkingLevel  string
 	model          string
 }
 
-// NewGoogleAIProvider creates a new GoogleAIProvider instance
-func NewGoogleAIProvider(ctx context.Context, model string, apiKey string, thinkingBudget *int32) (*GoogleAIProvider, error) {
+// NewGoogleAIProvider creates a new GoogleAIProvider instance. thinkingLevel
+// (Gemini 3 and later, e.g. "low") takes precedence over thinkingBudget, since
+// the API rejects a request that sets both.
+func NewGoogleAIProvider(ctx context.Context, model string, apiKey string, thinkingBudget *int32, thinkingLevel string) (*GoogleAIProvider, error) {
 	client, err := ocr.NewGenAIClient(ctx, apiKey)
 	if err != nil {
 		return nil, err
@@ -26,8 +30,21 @@ func NewGoogleAIProvider(ctx context.Context, model string, apiKey string, think
 	return &GoogleAIProvider{
 		client:         client,
 		thinkingBudget: thinkingBudget,
+		thinkingLevel:  thinkingLevel,
 		model:          model,
 	}, nil
+}
+
+// thinkingConfig returns the thinking settings for a request, or nil to use
+// the model's default.
+func (p *GoogleAIProvider) thinkingConfig() *genai.ThinkingConfig {
+	if p.thinkingLevel != "" {
+		return &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevel(strings.ToUpper(p.thinkingLevel))}
+	}
+	if p.thinkingBudget != nil {
+		return &genai.ThinkingConfig{ThinkingBudget: genai.Ptr(*p.thinkingBudget)}
+	}
+	return nil
 }
 
 // GenerateText sends a text generation request to Gemini API
@@ -36,14 +53,10 @@ func (p *GoogleAIProvider) GenerateText(ctx context.Context, prompt string) (str
 		return "", fmt.Errorf("googleai client not initialized")
 	}
 
-	// Prepare generation config with thinking budget if set
+	// Prepare generation config with thinking settings if set
 	var genConfig *genai.GenerateContentConfig
-	if p.thinkingBudget != nil {
-		genConfig = &genai.GenerateContentConfig{
-			ThinkingConfig: &genai.ThinkingConfig{
-				ThinkingBudget: genai.Ptr(*p.thinkingBudget),
-			},
-		}
+	if tc := p.thinkingConfig(); tc != nil {
+		genConfig = &genai.GenerateContentConfig{ThinkingConfig: tc}
 	}
 
 	contents := genai.Text(prompt)
@@ -55,6 +68,9 @@ func (p *GoogleAIProvider) GenerateText(ctx context.Context, prompt string) (str
 
 	if resp == nil || len(resp.Candidates) == 0 {
 		return "", fmt.Errorf("googleai GenerateContent API returned empty response")
+	}
+	if u := resp.UsageMetadata; u != nil {
+		log.Debugf("googleai usage: prompt=%d output=%d thinking=%d", u.PromptTokenCount, u.CandidatesTokenCount, u.ThoughtsTokenCount)
 	}
 
 	candidate := resp.Candidates[0]

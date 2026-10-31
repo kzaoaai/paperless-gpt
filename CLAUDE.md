@@ -97,6 +97,11 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     `genai.NewClient` call will conflict here. The three variables are in `env_registry.go` and
     the README table. Tests: `TestGenAIClientConfig`. Offered upstream as
     icereed/paperless-gpt#1225 (open); once it merges, take upstream's version and drop this item.
+  - `GOOGLEAI_THINKING_LEVEL` (`minimal`/`low`/`medium`/`high`) sets Gemini 3's thinking level
+    for the googleai LLM provider (`thinkingConfig`, `app_llm_googleai.go`); it overrides
+    `GOOGLEAI_THINKING_BUDGET`, since the API rejects both. Upstream has only the budget. The
+    provider also logs each call's token usage at debug level. In `env_registry.go` and the
+    README table. Tests: `TestGoogleAIThinkingConfig`. Not offered upstream.
   - The Dockerfile's builder stage pins `MUSL_DEV_VERSION="1.2.6-r3"`. Alpine 3.24 dropped
     `-r2`, which upstream still pins, so its `apk add` fails and no image builds. On a conflict,
     take whichever version the current Alpine repo serves; when upstream's Renovate catches up,
@@ -150,8 +155,14 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 - Production runs `9068471` (deployed 2026-10-25): the 2026-10-25 upstream sync on top of the
   Vertex backend, on Vertex with `gemini-3-flash-preview`. Verified by re-running one document's
   LLM stage (title, tags, custom fields and the `AI` workflow all applied, no fail tag).
-  Not yet verified: that the Developer Program credit absorbs the Vertex charges (Cloud billing
-  reports).
+  The Developer Program credit does absorb Vertex charges: October 2026's report shows $9.66 of
+  it against $15.70 of Vertex usage, almost all from the 2026-10-31 document-link backfill
+  (1,190 custom-field calls, ~1.3¢ each).
+- Thinking tokens are most of the cost: on 8 documents the custom-field prompt averaged ~2,400
+  thinking tokens per call at the model's default level ($0.0094 a call) against ~0 at `low`
+  ($0.0027, 71% less, about 5× faster). Answers at `low` were close; it fills `Amount` a little
+  more readily (a loan estimate's loan amount, an insurance premium). `GOOGLEAI_THINKING_LEVEL`
+  exists for this; production does not set it yet.
 - `0e8da29`'s CropBox import was verified live on an iOS scan with a CropBox (manual job, PDF
   action `versioned`): the new page has the CropBox's size, and the text layer's words sit over
   the printed words, so Document AI's hOCR of such a page describes the CropBox.
