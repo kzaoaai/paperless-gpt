@@ -211,4 +211,9 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   reject a single page as corrupt, which fails the whole run; documents over
   `OCR_LIMIT_PAGES` (30) are skipped. Left as is by AA's choice. gofpdi's xref-stream limit
   ("/Columns <= 4") should now be covered by the `normalizePDF` retry (no sample to verify).
+- Manual OCR jobs that crash in the searchable-PDF step (deferred by AA, Ops Backlog): docs 659
+  and 665 panic with a nil pointer dereference in "apply OCR", 1449 panics with "Failed to get
+  page content: Failed to resolve ..." (both from the PDF writer, gofpdi/ocrchestra side,
+  unconfirmed), and 772 fails "reading page sizes: Failed to initialize parser". Seen in the
+  2026-10-31 text-layer run; reproduce with `POST /api/documents/<id>/ocr` on one of them.
 - `gofmt -l .` lists several upstream files; leave them to upstream.
