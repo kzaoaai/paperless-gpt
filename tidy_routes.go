@@ -117,6 +117,17 @@ func (s *tidyService) routes(g *gin.RouterGroup) {
 		a, err := s.rename(c.Request.Context(), req.Kind, req.ID, req.Name)
 		tidyRespondAction(c, a, err)
 	})
+	g.POST("/delete-many", func(c *gin.Context) {
+		var req struct {
+			Kind string `json:"kind"`
+			IDs  []int  `json:"ids"`
+		}
+		if !tidyBind(c, &req, &req.Kind) {
+			return
+		}
+		a, err := s.deleteMany(c.Request.Context(), req.Kind, req.IDs)
+		tidyRespondAction(c, a, err)
+	})
 	g.POST("/delete", func(c *gin.Context) {
 		var req struct {
 			Kind string `json:"kind"`

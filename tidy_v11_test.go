@@ -237,3 +237,43 @@ func TestTidySplitOneRunAtATimeAndStop(t *testing.T) {
 	assert.Equal(t, "stopped", stored.Status)
 	assert.Len(t, results, 1, "the call cut short by stop is not recorded")
 }
+
+func TestTidyDeleteManyAndUndo(t *testing.T) {
+	f := newFakePaperless(t)
+	f.addObject("correspondents", 1, "Old Supplier", map[string]any{"owner": 2.0, "matching_algorithm": 0})
+	f.addObject("correspondents", 2, "Ministry", nil)
+	f.addObject("correspondents", 3, "In a mail rule", nil)
+	f.addObject("correspondents", 4, "Has documents", nil)
+	f.addDoc(tidyDoc{ID: 1, Correspondent: ip(4)})
+	f.lists["mail_rules"] = []map[string]any{{"id": 1.0, "name": "rule", "assign_correspondent": 3.0}}
+	s := newTestTidy(t, f)
+	ctx := context.Background()
+
+	a, err := s.deleteMany(ctx, "correspondents", []int{1, 2, 3, 4})
+	require.NoError(t, err)
+	assert.Equal(t, "done", a.Status)
+	assert.Nil(t, f.objects["correspondents"][1])
+	assert.Nil(t, f.objects["correspondents"][2])
+	assert.NotNil(t, f.objects["correspondents"][3], "one a mail rule uses stays")
+	assert.NotNil(t, f.objects["correspondents"][4], "one with documents stays")
+	assert.Contains(t, a.Summary, `skipped "In a mail rule" (in use), "Has documents" (1 documents)`)
+
+	_, err = s.deleteMany(ctx, "correspondents", []int{3, 4})
+	var refusal *tidyRefusal
+	require.ErrorAs(t, err, &refusal, "nothing deletable is refused")
+
+	// One name exists again before the undo: it is left, the other comes back.
+	f.addObject("correspondents", 50, "Ministry", nil)
+	u, err := s.undo(ctx, a.ID, false)
+	require.NoError(t, err)
+	assert.Contains(t, u.UndoNote, "Recreated 1")
+	assert.Contains(t, u.UndoNote, `not recreated: an object named "Ministry" exists again`)
+	found := false
+	for _, o := range f.objects["correspondents"] {
+		if o["name"] == "Old Supplier" {
+			found = true
+			assert.EqualValues(t, 2, o["owner"])
+		}
+	}
+	assert.True(t, found)
+}

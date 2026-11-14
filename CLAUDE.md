@@ -223,7 +223,15 @@ against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rule
   per-document PATCH (a bulk "remove B" would strip B's descendants), other kinds by bulk edit.
   Documents changed since are refused unless forced, and then skipped. Undo refuses when an object
   with the old name exists again. Renames, matching changes and grants restore the logged values.
-  Not undone: an older alias that a merge re-pointed from A to B.
+  Not undone: an older alias that a merge re-pointed from A to B. "Delete all" on the no-documents finding is one `delete_many` action over the ones with nothing
+  referring to them (and, for tags, nothing below them); its undo recreates each, leaving any whose
+  name exists again.
+- Matching text that None/Automatic ignores can be switched to "Exact match" (the whole text as a
+  phrase) or "Any word" (the page warns when a word like "of" would match nearly everything), or
+  cleared. Production sets `AUTO_GENERATE_CORRESPONDENTS` and `AUTO_GENERATE_DOCUMENT_TYPE` and not
+  `PRESERVE_EXISTING_METADATA`, so paperless-gpt's LLM overrides paperless-ngx's own matching for
+  correspondents and types on every processed document; their matching rules matter only for what
+  the LLM leaves unset.
 - A trashed document that uses a merged or deleted object should lose it, since paperless-ngx clears
   the reference on delete (inferred from its models, not tested); restoring it from the trash would
   not bring it back. Version rows lose a merged tag the same way, which is harmless (they are not

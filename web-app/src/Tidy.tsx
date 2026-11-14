@@ -40,6 +40,10 @@ const FINDING_TITLES: Record<string, string> = {
 
 type SortKey = "name" | "doc_count" | "last_created" | "last_added";
 
+// Words that appear in nearly every document; "Any word" matching on them
+// would match almost everything.
+const COMMON_WORDS = new Set(["the", "and", "for", "from", "with", "your", "this", "that", "department", "account", "statement", "invoice", "total"]);
+
 interface LLMState {
   kind: Kind;
   loading: boolean;
@@ -183,6 +187,32 @@ const Tidy: React.FC = () => {
             Merge…
           </Button>
         ) : null;
+      case "unused": {
+        const deletable = f.ids.filter((id) => {
+          const r = byId.get(id);
+          return r && r.doc_count === 0 && r.references.length === 0 && !rows.some((x) => x.parent === id);
+        });
+        if (deletable.length < 2) return null;
+        return (
+          <Button
+            size="sm"
+            variant="danger"
+            disabled={!writes || working}
+            onClick={() =>
+              setConfirm({
+                title: `Delete ${deletable.length} ${kindInfo.label.toLowerCase()}`,
+                body: `Delete ${names(deletable).map((x) => `“${x}”`).join(", ")}? None has documents or is used anywhere. This is one logged action, and one Undo brings them all back.${
+                  deletable.length < f.ids.length ? ` ${f.ids.length - deletable.length} others are in use and stay.` : ""
+                }`,
+                label: "Delete all",
+                run: () => tidyApi.removeMany(kind, deletable),
+              })
+            }
+          >
+            Delete all {deletable.length}
+          </Button>
+        );
+      }
       case "dead_rule":
         return (
           <Button
@@ -200,7 +230,19 @@ const Tidy: React.FC = () => {
             Set to None
           </Button>
         );
-      case "ignored_rule_text":
+      case "ignored_rule_text": {
+        const texts = f.ids.map((id) => `${byId.get(id)?.name}: “${byId.get(id)?.match}”`).join("; ");
+        const common = f.ids.flatMap((id) =>
+          (byId.get(id)?.match ?? "").split(/\s+/).filter((w) => w.length > 0 && (w.length <= 3 || COMMON_WORDS.has(w.toLowerCase())))
+        );
+        const commonNote = common.length
+          ? ` Careful: “${[...new Set(common)].join("”, “")}” appears in almost every document, so any-word matching would assign them nearly everywhere.`
+          : "";
+        const byAlgo = new Map<number, number[]>();
+        f.ids.forEach((id) => {
+          const algo = byId.get(id)?.matching_algorithm ?? 6;
+          byAlgo.set(algo, [...(byAlgo.get(algo) ?? []), id]);
+        });
         return (
           <div className="flex flex-wrap gap-2">
             <Button
@@ -208,14 +250,28 @@ const Tidy: React.FC = () => {
               disabled={!writes || working}
               onClick={() =>
                 setConfirm({
-                  title: "Match on the text",
-                  body: `Switch ${n} to "Any word" so their matching text is used. paperless-ngx then assigns them to new documents containing any of those words, instead of using its learned (Automatic) matching.`,
+                  title: "Match the exact text",
+                  body: `Switch ${n} to "Exact match": paperless-ngx then assigns each to new documents containing that exact text, instead of its learned (Automatic) matching. ${texts}.`,
+                  label: "Use Exact match",
+                  run: () => tidyApi.setMatching(kind, f.ids, 3),
+                })
+              }
+            >
+              Exact text
+            </Button>
+            <Button
+              size="sm"
+              disabled={!writes || working}
+              onClick={() =>
+                setConfirm({
+                  title: "Match any of the words",
+                  body: `Switch ${n} to "Any word": paperless-ngx then assigns each to new documents containing any one of its words. ${texts}.${commonNote}`,
                   label: "Use Any word",
                   run: () => tidyApi.setMatching(kind, f.ids, 1),
                 })
               }
             >
-              Use the text
+              Any word
             </Button>
             <Button
               size="sm"
@@ -224,12 +280,10 @@ const Tidy: React.FC = () => {
               onClick={() =>
                 setConfirm({
                   title: "Clear the matching text",
-                  body: `Remove the unused matching text from ${n}, keeping their algorithm.`,
+                  body: `Remove the unused matching text from ${n}, keeping their algorithm, so nothing changes in how they match. ${texts}.`,
                   label: "Clear text",
                   run: async () => {
-                    for (const id of f.ids) {
-                      await tidyApi.setMatching(kind, [id], byId.get(id)?.matching_algorithm ?? 6, "");
-                    }
+                    for (const [algo, ids] of byAlgo) await tidyApi.setMatching(kind, ids, algo, "");
                   },
                 })
               }
@@ -238,6 +292,7 @@ const Tidy: React.FC = () => {
             </Button>
           </div>
         );
+      }
       case "hidden_from_viewer":
         return (
           <Button

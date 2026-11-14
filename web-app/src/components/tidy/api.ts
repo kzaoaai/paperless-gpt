@@ -238,6 +238,7 @@ export const tidyApi = {
     call<Action>("POST", "merge", { kind, source_id, target_id }),
   rename: (kind: Kind, id: number, name: string) => call<Action>("POST", "rename", { kind, id, name }),
   remove: (kind: Kind, id: number) => call<Action>("POST", "delete", { kind, id }),
+  removeMany: (kind: Kind, ids: number[]) => call<Action>("POST", "delete-many", { kind, ids }),
   setMatching: (kind: Kind, ids: number[], matching_algorithm: number, match?: string) =>
     call<Action>("POST", "matching", { kind, ids, matching_algorithm, match }),
   grantViewer: (kind: Kind, ids: number[]) => call<Action>("POST", "grant-viewer", { kind, ids }),

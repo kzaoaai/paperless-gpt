@@ -495,6 +495,90 @@ func (s *tidyService) deleteEmpty(ctx context.Context, kind string, id int) (*Ti
 	return a, nil
 }
 
+// deleteMany deletes several objects that have no documents and nothing
+// referring to them, as one logged action that one undo reverses. Objects
+// that do not qualify are skipped and named in the summary.
+func (s *tidyService) deleteMany(ctx context.Context, kind string, ids []int) (*TidyAction, error) {
+	if err := s.requireWrites(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, tidyRefuse("nothing selected")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer s.invalidate()
+
+	refs := tidyFetchReferences(ctx, s.client)
+	if len(refs.Warnings) > 0 {
+		return nil, errors.New(strings.Join(refs.Warnings, "; "))
+	}
+	cfg := s.configRefs()
+	var tags []tidyObject
+	if kind == "tags" {
+		var err error
+		if tags, err = tidyFetchObjects(ctx, s.client, "tags"); err != nil {
+			return nil, err
+		}
+	}
+	detail := &tidyActionDetail{}
+	var names, skipped []string
+	for _, id := range tidyUniqueSorted(ids) {
+		obj, err := tidyFetchObject(ctx, s.client, kind, id)
+		if err != nil {
+			return nil, err
+		}
+		if obj == nil {
+			continue
+		}
+		why := ""
+		if r := tidyRefsFor(append(append([]tidyRef{}, refs.Refs...), tidyConfigReferences(cfg, []tidyObject{*obj})...), kind, *obj); len(r) > 0 {
+			why = "in use"
+		} else if kind == "tags" && len(tidyDescendants(tags, id)) > 0 {
+			why = "has tags below it"
+		} else if docs, err := tidyFetchDocs(ctx, s.client, tidyDocFilter(kind, id)); err != nil {
+			return nil, err
+		} else if len(docs) > 0 {
+			why = fmt.Sprintf("%d documents", len(docs))
+		}
+		if why != "" {
+			skipped = append(skipped, fmt.Sprintf("%q (%s)", obj.Name, why))
+			continue
+		}
+		detail.Objects = append(detail.Objects, tidyObjectState{ID: id, Raw: obj.Raw})
+		names = append(names, obj.Name)
+	}
+	if len(detail.Objects) == 0 {
+		return nil, tidyRefuse("none of them can be deleted: %s", strings.Join(skipped, ", "))
+	}
+	a := &TidyAction{Action: "delete_many", Kind: kind, ObjectID: detail.Objects[0].ID, ObjectName: strings.Join(names, ", "), Status: "started",
+		Summary: fmt.Sprintf("Delete %d with no documents", len(detail.Objects))}
+	if len(skipped) > 0 {
+		a.Summary += "; skipped " + strings.Join(skipped, ", ")
+	}
+	if len(a.ObjectName) > 250 {
+		a.ObjectName = a.ObjectName[:250] + "…"
+	}
+	if len(a.Summary) > 1000 {
+		a.Summary = a.Summary[:1000] + "…"
+	}
+	s.saveAction(a, detail)
+	for i, st := range detail.Objects {
+		if err := tidySend(ctx, s.client, "DELETE", fmt.Sprintf("api/%s/%d/", kind, st.ID), nil, nil); err != nil {
+			a.Status, a.Error = "partial", err.Error()
+			if i == 0 {
+				a.Status = "failed"
+			}
+			detail.Objects = detail.Objects[:i]
+			s.saveAction(a, detail)
+			return a, err
+		}
+	}
+	a.Status = "done"
+	s.saveAction(a, detail)
+	return a, nil
+}
+
 // --- fixes ---
 
 // setMatching sets the matching algorithm (and, when match is not nil, the
@@ -693,6 +777,29 @@ func (s *tidyService) undo(ctx context.Context, id uint, force bool) (*TidyActio
 	switch a.Action {
 	case "merge":
 		note, err = s.undoMerge(ctx, &a, &d, force)
+	case "delete_many":
+		// An object whose name exists again is left as it is, so a retry
+		// after a partial undo picks up where it stopped.
+		var made, exists []string
+		for _, st := range d.Objects {
+			newID, rerr := s.recreate(ctx, a.Kind, st.Raw)
+			var refusal *tidyRefusal
+			if errors.As(rerr, &refusal) {
+				exists = append(exists, refusal.Message)
+				continue
+			}
+			if rerr != nil {
+				err = fmt.Errorf("recreated %d, then: %w", len(made), rerr)
+				break
+			}
+			made = append(made, fmt.Sprint(newID))
+		}
+		if err == nil {
+			note = fmt.Sprintf("Recreated %d (new ids %s)", len(made), strings.Join(made, ", "))
+			if len(exists) > 0 {
+				note += "; not recreated: " + strings.Join(exists, "; ")
+			}
+		}
 	case "delete":
 		var newID int
 		newID, err = s.recreate(ctx, a.Kind, d.Object)
