@@ -90,6 +90,75 @@ export interface Inventory {
   updated_workflows: WorkflowInfo[];
   aliases: Alias[];
   warnings: string[] | null;
+  hygiene: HygieneItem[] | null;
+  field_audit: FieldAudit[] | null;
+}
+
+export interface HygieneItem {
+  key: string;
+  label: string;
+  count: number;
+  /** paperless-ngx documents-list query showing these documents */
+  query?: string;
+}
+
+export interface ValueCount {
+  value: string;
+  count: number;
+}
+
+export interface FieldAudit {
+  id: number;
+  name: string;
+  data_type: string;
+  doc_count: number;
+  empty_count: number;
+  distinct: number;
+  top: ValueCount[];
+  variants: ValueCount[][];
+  unused_options: string[];
+  no_currency?: number;
+}
+
+export interface SplitRun {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  correspondent_id: number;
+  correspondent_name: string;
+  exclude_self: boolean;
+  status: "running" | "done" | "stopped" | "failed";
+  total: number;
+  done: number;
+  error?: string;
+}
+
+export interface SplitDoc {
+  id: number;
+  title: string;
+  moved: boolean;
+}
+
+export interface SplitGroup {
+  key: string;
+  target_id?: number;
+  target_name: string;
+  new: boolean;
+  stay: boolean;
+  similar?: string;
+  docs: SplitDoc[];
+}
+
+export interface SplitView {
+  run: SplitRun;
+  groups: SplitGroup[];
+  failed: { doc_id: number; title: string; error?: string }[];
+}
+
+export interface SplitApplyGroup {
+  doc_ids: number[];
+  target_id: number;
+  new_name: string;
 }
 
 export interface Action {
@@ -175,6 +244,12 @@ export const tidyApi = {
   undo: (id: number, force = false) => call<Action>("POST", `actions/${id}/undo`, { force }),
   deleteAlias: (id: number) => call<unknown>("DELETE", `aliases/${id}`),
   llmGroups: (kind: Kind) => call<LLMGroup[]>("POST", "llm-groups", { kind }),
+  splitStart: (correspondent_id: number, exclude_self: boolean) =>
+    call<SplitRun>("POST", "split/start", { correspondent_id, exclude_self }),
+  splitRuns: () => call<SplitRun[]>("GET", "split/runs"),
+  splitView: (id: number) => call<SplitView>("GET", `split/runs/${id}`),
+  splitStop: () => call<{ stopping: boolean }>("POST", "split/stop"),
+  splitApply: (run_id: number, groups: SplitApplyGroup[]) => call<Action>("POST", "split/apply", { run_id, groups }),
 };
 
 /** The paperless-ngx documents list filtered to one object. */

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"paperless-gpt/sanitize"
+
 	"github.com/gin-gonic/gin"
 	"github.com/tmc/langchaingo/llms"
 )
@@ -23,7 +25,7 @@ func registerTidy(router *gin.Engine, api *gin.RouterGroup, app *App) {
 		return
 	}
 	if app.Database != nil {
-		if err := app.Database.AutoMigrate(&TidyAction{}, &TidyAlias{}); err != nil {
+		if err := app.Database.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}); err != nil {
 			log.Errorf("Tidy page disabled: migrating its tables failed: %v", err)
 			return
 		}
@@ -52,6 +54,17 @@ func registerTidy(router *gin.Engine, api *gin.RouterGroup, app *App) {
 			}
 			return resp.Choices[0].Content, nil
 		}
+		// The same prompt, candidate filtering and blacklist as document
+		// processing, so a split suggests what processing would.
+		s.suggest = func(ctx context.Context, title, content string, names []string) (string, error) {
+			content = sanitize.Sanitize(content)
+			candidates := filterCorrespondentsForPrompt(names, content, title, correspondentPromptLimit)
+			return app.getSuggestedCorrespondent(ctx, content, title, candidates, correspondentBlackList, nil)
+		}
+	}
+	// A run left "running" by a restart can never finish.
+	if app.Database != nil {
+		app.Database.Model(&TidySplitRun{}).Where("status = ?", "running").Update("status", "stopped")
 	}
 	s.routes(api.Group("/tidy"))
 
@@ -182,6 +195,52 @@ func (s *tidyService) routes(g *gin.RouterGroup) {
 		}
 		s.invalidate()
 		c.JSON(http.StatusOK, gin.H{"deleted": id})
+	})
+	g.POST("/split/start", func(c *gin.Context) {
+		var req struct {
+			CorrespondentID int  `json:"correspondent_id"`
+			ExcludeSelf     bool `json:"exclude_self"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		run, err := s.startSplit(c.Request.Context(), req.CorrespondentID, req.ExcludeSelf)
+		tidyRespond(c, run, err)
+	})
+	g.GET("/split/runs", func(c *gin.Context) {
+		runs := []TidySplitRun{}
+		if s.db != nil {
+			if err := s.db.Omit("results").Order("id desc").Limit(50).Find(&runs).Error; err != nil {
+				tidyRespond(c, nil, err)
+				return
+			}
+		}
+		c.JSON(http.StatusOK, runs)
+	})
+	g.GET("/split/runs/:id", func(c *gin.Context) {
+		id, err := strconv.Atoi(c.Param("id"))
+		if err != nil || id <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad run id"})
+			return
+		}
+		view, err := s.splitView(c.Request.Context(), uint(id))
+		tidyRespond(c, view, err)
+	})
+	g.POST("/split/stop", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"stopping": s.stopSplit()})
+	})
+	g.POST("/split/apply", func(c *gin.Context) {
+		var req struct {
+			RunID  uint                  `json:"run_id"`
+			Groups []tidySplitApplyGroup `json:"groups"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		a, err := s.applySplit(c.Request.Context(), req.RunID, req.Groups)
+		tidyRespondAction(c, a, err)
 	})
 	g.POST("/llm-groups", func(c *gin.Context) {
 		var req struct {

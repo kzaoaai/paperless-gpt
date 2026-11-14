@@ -27,6 +27,7 @@ type fakePaperless struct {
 	docs    map[int]*tidyDoc
 	users   []tidyUser
 	lists   map[string][]map[string]any // workflows, saved_views, mail_rules
+	titles  map[int]string
 	nextID  int
 	writes  []string
 	srv     *httptest.Server
@@ -34,7 +35,7 @@ type fakePaperless struct {
 
 func newFakePaperless(t *testing.T) *fakePaperless {
 	f := &fakePaperless{t: t, objects: map[string]map[int]map[string]any{}, docs: map[int]*tidyDoc{},
-		lists: map[string][]map[string]any{}, nextID: 1000}
+		lists: map[string][]map[string]any{}, titles: map[int]string{}, nextID: 1000}
 	for _, k := range tidyKinds {
 		f.objects[k] = map[int]map[string]any{}
 	}
@@ -296,6 +297,9 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if merge {
+				if _, ok := o["permissions"].(map[string]any); !ok {
+					o["permissions"] = perm()
+				}
 				cur := o["permissions"].(map[string]any)
 				for _, p := range []string{"view", "change"} {
 					for _, who := range []string{"users", "groups"} {
@@ -312,6 +316,9 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		writeJSON(w, 200, map[string]any{"result": "OK"})
+	case len(parts) == 3 && parts[1] == "documents" && r.Method == "GET":
+		id, _ := strconv.Atoi(parts[2])
+		writeJSON(w, 200, map[string]any{"id": id, "title": f.titles[id], "content": "text of " + f.titles[id]})
 	case len(parts) == 3 && parts[1] == "documents" && r.Method == "PATCH":
 		id, _ := strconv.Atoi(parts[2])
 		d := f.docs[id]
@@ -404,7 +411,7 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 func newTestTidy(t *testing.T, f *fakePaperless) *tidyService {
 	db, err := InitializeTestDB()
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&TidyAction{}, &TidyAlias{}))
+	require.NoError(t, db.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}))
 	return &tidyService{client: f.client(), db: db, writes: true, viewer: "mcp-reader",
 		configRefs: func() tidyConfigRefs {
 			return tidyConfigRefs{TagNames: map[string]string{"paperless-gpt": "AUTO_TAG"}, CustomFieldIDs: map[int]string{}}

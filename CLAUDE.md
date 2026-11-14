@@ -162,8 +162,9 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 Inventory and cleanup of paperless-ngx tags, correspondents, document types, storage paths and
 custom fields. Go: `tidy_paperless.go` (API calls), `tidy_findings.go` (inventory, references,
 findings), `tidy_actions.go` (actions, log, undo, aliases), `tidy_routes.go` (`/api/tidy/...`),
-`tidy_llm.go` (LLM duplicate groups). Tests: `tidy_test.go`, against a stateful fake paperless
-that applies paperless-ngx 3.0's tag-tree rules.
+`tidy_llm.go` (LLM duplicate groups), `tidy_hygiene.go` (archive health, custom-field values),
+`tidy_split.go` (splitting a catch-all correspondent). Tests: `tidy_test.go` and `tidy_v11_test.go`,
+against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rules.
 
 - **Read-only unless `TIDY_WRITES=true`.** :8080 has no login, and these are the first actions
   here that delete things. `TIDY_VIEWER_USER` (default `mcp-reader`) is the user the
@@ -190,6 +191,31 @@ that applies paperless-ngx 3.0's tag-tree rules.
   `UpdateDocuments` resolves LLM suggestions with, so the LLM saying "ACCU" lands on the merge target
   instead of recreating it. A real object with that name always wins. Tag aliases do not exist: tag
   suggestions are filtered against existing tags before `UpdateDocuments`.
+- Archive health (`tidyBuildHygiene`), from the same document pass: no correspondent, no type, no
+  tags, still in an inbox tag after 14 days, carrying `AUTO_TAG` or `AUTO_OCR_TAG` for more than a
+  day, carrying `FAIL_TAG`. Each links to the paperless-ngx list (`correspondent__isnull=1`,
+  `is_tagged=0`, `is_in_inbox=1&added__date__lt=…`, which its UI reads from the URL). A "no text"
+  count was dropped: paperless-ngx ignores an empty `content__iexact`, and reading every document's
+  text on each refresh is too heavy.
+- Custom-field values (`tidyBuildFieldAudit`): per field, documents carrying it and how many are
+  empty, distinct values, the 25 most common (select ids shown as labels), values that differ only in
+  case, spacing or punctuation (`"2025, 2026"` vs `"2025,2026"`), unused select options, monetary
+  values without a currency code. Read-only.
+- Split a catch-all correspondent (`tidy_split.go`): a background run (one at a time, stoppable,
+  stored in `tidy_split_runs`) asks the same correspondent prompt document processing uses
+  (`getSuggestedCorrespondent` with `filterCorrespondentsForPrompt` and the blacklist) about each
+  document, by default with the bucket left out of the choices. The page groups the answers as
+  `UpdateDocuments` would resolve them (case-insensitive, aliases): an existing correspondent, a new
+  name (flagged when it looks like an existing one), or "stays" (the bucket itself, "Unknown"). A
+  ticked group can be pointed at any existing correspondent instead. Applying is one `split` action:
+  documents still on the bucket move; new names are created the way paperless-gpt creates them
+  (owner = the API user) and get the viewer's view grant. Undo moves them back and deletes the
+  correspondents the split created once they are empty and unused. A run costs one LLM call per
+  document; a restart marks a running run `stopped`. Verified 2026-11-15 on the test instance: a
+  split to two existing correspondents and one new one, then its undo, left the instance identical
+  by name; the new correspondent was owned by the API user with the viewer's grant. The prompt side
+  has only run on a stub and on local Ollama, which crashed after 4 of 7 documents. Never test it
+  against Ollama on AA's Mac: `qwen3:8b` ran the M4 out of memory and macOS killed his apps.
 - bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
   Document Updated workflows run on them; the merge preview lists the enabled ones.
 - Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes

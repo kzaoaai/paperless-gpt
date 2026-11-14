@@ -11,6 +11,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import ActionLog from "./components/tidy/ActionLog";
 import MergeDialog from "./components/tidy/MergeDialog";
+import SplitDialog from "./components/tidy/SplitDialog";
 import {
   Action,
   Finding,
@@ -62,6 +63,7 @@ const Tidy: React.FC = () => {
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "name", desc: false });
 
   const [mergeIds, setMergeIds] = useState<number[] | null>(null);
+  const [splitRow, setSplitRow] = useState<Row | null>(null);
   const [renameRow, setRenameRow] = useState<Row | null>(null);
   const [renameTo, setRenameTo] = useState("");
   const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; run: () => Promise<unknown> } | null>(null);
@@ -293,6 +295,36 @@ const Tidy: React.FC = () => {
         </p>
       )}
 
+      {inv && (inv.hygiene ?? []).length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold">
+            Archive health <span className="font-normal text-muted">({inv.document_count} documents)</span>
+          </h2>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {(inv.hygiene ?? []).map((h) => {
+              const href = paperlessUrl && h.query ? `${paperlessUrl}/documents?${h.query}` : undefined;
+              const body = (
+                <>
+                  <span className={classNames("block text-lg font-semibold tabular-nums", h.count > 0 ? "text-ink" : "text-faint")}>
+                    {h.count}
+                  </span>
+                  <span className="block text-xs text-muted">{h.label}</span>
+                </>
+              );
+              return href && h.count > 0 ? (
+                <a key={h.key} href={href} target="_blank" rel="noreferrer" className="rounded-md border border-line px-3 py-2 hover:bg-surface-2">
+                  {body}
+                </a>
+              ) : (
+                <div key={h.key} className="rounded-md border border-line px-3 py-2">
+                  {body}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       <nav className="flex flex-wrap gap-1 border-b border-line" aria-label="Object type">
         {KINDS.map((k) => (
           <button
@@ -404,6 +436,57 @@ const Tidy: React.FC = () => {
             </ul>
           </section>
 
+          {kind === "custom_fields" && (inv.field_audit ?? []).length > 0 && (
+            <section className="space-y-3">
+              <h2 className="text-sm font-semibold">Values</h2>
+              <p className="text-xs text-muted">
+                What each field holds, its most common values, values that differ only in case, spacing or punctuation,
+                and select options nothing uses.
+              </p>
+              <div className="grid gap-3 lg:grid-cols-2">
+                {(inv.field_audit ?? []).map((a) => (
+                  <div key={a.id} className="space-y-2 rounded-md border border-line px-3 py-2 text-sm">
+                    <p className="font-medium">
+                      {a.name} <span className="text-xs font-normal text-faint">{a.data_type}</span>
+                    </p>
+                    <p className="text-xs text-muted">
+                      On {a.doc_count} documents, {a.empty_count} of them empty; {a.distinct} different values
+                      {a.no_currency ? `; ${a.no_currency} without a currency code` : ""}.
+                    </p>
+                    {a.variants.length > 0 && (
+                      <div className="text-xs">
+                        <p className="text-warn">Written differently:</p>
+                        <ul className="ml-4 list-disc">
+                          {a.variants.map((g, i) => (
+                            <li key={i}>{g.map((v) => `“${v.value}” (${v.count})`).join(" · ")}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {a.unused_options.length > 0 && (
+                      <p className="text-xs text-warn">Unused options: {a.unused_options.join(", ")}</p>
+                    )}
+                    {a.top.length > 0 && a.data_type !== "documentlink" && (
+                      <details className="text-xs">
+                        <summary className="cursor-pointer text-muted">
+                          Most common values{a.distinct > a.top.length ? ` (top ${a.top.length})` : ""}
+                        </summary>
+                        <ul className="mt-1 space-y-0.5">
+                          {a.top.map((v) => (
+                            <li key={v.value} className="flex justify-between gap-2">
+                              <span className="truncate">{v.value}</span>
+                              <span className="tabular-nums text-faint">{v.count}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           <section className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold">
@@ -486,6 +569,11 @@ const Tidy: React.FC = () => {
                         )}
                       </td>
                       <td className="whitespace-nowrap px-2 py-1.5 text-right">
+                        {kind === "correspondents" && r.doc_count >= 2 && (
+                          <Button size="sm" variant="ghost" onClick={() => setSplitRow(r)}>
+                            Split…
+                          </Button>
+                        )}
                         {writes && (
                           <>
                             <Button
@@ -568,6 +656,20 @@ const Tidy: React.FC = () => {
             )}
           </section>
         </>
+      )}
+
+      {inv && splitRow && (
+        <SplitDialog
+          bucket={splitRow}
+          rows={inv.objects.correspondents}
+          writes={writes}
+          paperlessUrl={paperlessUrl}
+          onClose={() => setSplitRow(null)}
+          onDone={(m) => {
+            setSplitRow(null);
+            changed(m);
+          }}
+        />
       )}
 
       {inv && mergeIds && (

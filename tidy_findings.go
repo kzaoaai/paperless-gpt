@@ -85,6 +85,8 @@ type tidyInventory struct {
 	MatchingSummary  map[string]map[string]int `json:"matching_summary"`
 	UpdatedWorkflows []tidyWorkflowInfo        `json:"updated_workflows"`
 	Aliases          []TidyAlias               `json:"aliases"`
+	Hygiene          []tidyHygieneItem         `json:"hygiene"`
+	FieldAudit       []tidyFieldAudit          `json:"field_audit"`
 	Warnings         []string                  `json:"warnings"`
 }
 
@@ -93,6 +95,9 @@ type tidyInventory struct {
 type tidyConfigRefs struct {
 	TagNames       map[string]string // tag name -> where ("AUTO_TAG")
 	CustomFieldIDs map[int]string    // field id -> where
+	// Queue tags, for the hygiene counts: documents waiting for paperless-gpt
+	// and documents it gave up on.
+	AutoTag, OCRTag, FailTag string
 }
 
 // tidyCurrentConfigRefs reads paperless-gpt's live configuration.
@@ -114,6 +119,7 @@ func tidyCurrentConfigRefs() tidyConfigRefs {
 	add(autoTagComplete, "AUTO_TAG_COMPLETE")
 	add(autoOcrTag, "AUTO_OCR_TAG")
 	add(failTag, "FAIL_TAG")
+	refs.AutoTag, refs.OCRTag, refs.FailTag = autoTag, autoOcrTag, failTag
 	if pdfOCRTagging {
 		add(pdfOCRCompleteTag, "PDF_OCR_COMPLETE_TAG")
 	}

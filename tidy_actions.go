@@ -72,6 +72,9 @@ type tidyActionDetail struct {
 	Objects     []tidyObjectState `json:"objects,omitempty"`
 	Set         map[string]any    `json:"set,omitempty"`
 	RecreatedID int               `json:"recreated_id,omitempty"`
+	// Split: correspondents the split created, and the run it came from.
+	Created  []int `json:"created,omitempty"`
+	SplitRun uint  `json:"split_run,omitempty"`
 }
 
 // tidyRefusal is an action Tidy will not take; the page shows why.
@@ -99,6 +102,10 @@ type tidyService struct {
 	mu      sync.Mutex // serializes write actions and undo
 	cacheMu sync.Mutex
 	cache   *tidyInventory
+
+	suggest     tidySuggestFunc // paperless-gpt's correspondent prompt; nil without an LLM
+	splitMu     sync.Mutex
+	splitCancel context.CancelFunc // set while a split run is going
 }
 
 func (s *tidyService) invalidate() {
@@ -142,6 +149,8 @@ func (s *tidyService) inventory(ctx context.Context, refresh bool) (*tidyInvento
 		}
 	}
 	inv.Objects, inv.Findings, inv.MatchingSummary = tidyBuildInventory(objects, docs, allRefs, viewer, tidyFetchUsers(ctx, s.client))
+	inv.Hygiene = tidyBuildHygiene(docs, objects["tags"], s.configRefs(), time.Now())
+	inv.FieldAudit = tidyBuildFieldAudit(docs, objects["custom_fields"])
 	inv.Aliases = []TidyAlias{}
 	if s.db != nil {
 		s.db.Order("id").Find(&inv.Aliases)
@@ -705,6 +714,8 @@ func (s *tidyService) undo(ctx context.Context, id uint, force bool) (*TidyActio
 		note, err = s.undoMatching(ctx, &a, &d, force)
 	case "grant_viewer":
 		note, err = s.undoPermissions(ctx, &a, &d)
+	case "split":
+		note, err = s.undoSplit(ctx, &a, &d, force)
 	default:
 		err = tidyRefuse("cannot undo %q", a.Action)
 	}

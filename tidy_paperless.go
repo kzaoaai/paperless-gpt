@@ -79,16 +79,21 @@ type tidyObject struct {
 
 // tidyDoc is the slice of a document the Tidy page reads.
 type tidyDoc struct {
-	ID            int    `json:"id"`
-	Created       string `json:"created"`
-	Added         string `json:"added"`
-	Tags          []int  `json:"tags"`
-	Correspondent *int   `json:"correspondent"`
-	DocumentType  *int   `json:"document_type"`
-	StoragePath   *int   `json:"storage_path"`
-	CustomFields  []struct {
-		Field int `json:"field"`
-	} `json:"custom_fields"`
+	ID            int              `json:"id"`
+	Created       string           `json:"created"`
+	Added         string           `json:"added"`
+	Tags          []int            `json:"tags"`
+	Correspondent *int             `json:"correspondent"`
+	DocumentType  *int             `json:"document_type"`
+	StoragePath   *int             `json:"storage_path"`
+	CustomFields  []tidyFieldValue `json:"custom_fields"`
+}
+
+// tidyFieldValue is one custom field on a document; Value is kept raw since
+// its shape depends on the field's data type.
+type tidyFieldValue struct {
+	Field int             `json:"field"`
+	Value json.RawMessage `json:"value"`
 }
 
 // refs returns the ids of objects of kind this document points at.
