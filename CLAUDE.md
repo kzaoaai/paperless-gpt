@@ -206,12 +206,15 @@ that applies paperless-ngx 3.0's tag-tree rules.
   with production's object names and matching rules and 193 dummy documents: every action, then every
   undo, left objects, owners, permissions, matching, the tag tree and all document assignments
   identical by name; an LLM-style suggestion of a merged-away correspondent name landed on the target
-  through `/api/update-documents`; LLM groups ran on local Ollama `qwen3:8b`. Not yet run against
-  production or with Gemini.
+  through `/api/update-documents`; LLM groups ran on local Ollama `qwen3:8b`. In production
+  (2026-11-14, read-only): the inventory reads 1,199 documents in about 2 s, a merge preview works,
+  and Gemini's duplicate groups matched the name rules (one pair). No write has run in production.
 
 ### Open items
 
-- Production runs `30ac1b1` (deployed 2026-10-31) with `GOOGLEAI_THINKING_LEVEL=low`; before it,
+- Production runs `1d87a5a` (deployed 2026-11-14: the Tidy page, read-only since `TIDY_WRITES` is
+  unset; rollback image `:30ac1b16f0983fadf3d2593fc00fd7e25333e858`). Before it, `30ac1b1`
+  (deployed 2026-10-31) with `GOOGLEAI_THINKING_LEVEL=low`; before that,
   `9068471` (deployed 2026-10-25): the 2026-10-25 upstream sync on top of the Vertex backend, on
   Vertex with `gemini-3-flash-preview`. Verified by re-running one document's
   LLM stage (title, tags, custom fields and the `AI` workflow all applied, no fail tag).
