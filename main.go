@@ -665,6 +665,8 @@ func main() {
 		})
 	}
 
+	registerTidy(router, api, app) // fork: Tidy page (tidy_*.go)
+
 	// Start OCR worker pool
 	numWorkers := 1 // Number of workers to start
 	startWorkerPool(app, numWorkers)

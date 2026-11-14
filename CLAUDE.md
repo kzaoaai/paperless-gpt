@@ -106,6 +106,13 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     `-r2`, which upstream still pins, so its `apk add` fails and no image builds. On a conflict,
     take whichever version the current Alpine repo serves; when upstream's Renovate catches up,
     take theirs and drop this item. Offered upstream as icereed/paperless-gpt#1224 (open).
+  - The Tidy page (below) is fork-only and touches upstream files in exactly these places:
+    `registerTidy(router, api, app)` in `main.go`, the `tidyApplyAliases` line in
+    `UpdateDocuments` (`paperless.go`), two `TIDY_*` entries in `env_registry.go`, and the
+    import, route and sidebar item in `App.tsx` and `Sidebar.tsx`. Everything else is in
+    `tidy_*.go` and `web-app/src/{Tidy.tsx,components/tidy/}`. If upstream stops calling
+    `UpdateDocuments` with the database, aliases silently stop working; `TestTidyApplyAliasesRealNameWins`
+    covers the function, not the call site.
 
 ### Production invariants (config, not code)
 
@@ -149,6 +156,58 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   out. `gemini-2.5-flash` and `2.5-flash-lite` return 404 on Vertex for this project. Flash-Lite
   models were measured worse (wrong created dates, invented amounts, wrong tags), so they are not
   a cost saving worth taking.
+
+### Tidy page (fork-only, `/tidy`)
+
+Inventory and cleanup of paperless-ngx tags, correspondents, document types, storage paths and
+custom fields. Go: `tidy_paperless.go` (API calls), `tidy_findings.go` (inventory, references,
+findings), `tidy_actions.go` (actions, log, undo, aliases), `tidy_routes.go` (`/api/tidy/...`),
+`tidy_llm.go` (LLM duplicate groups). Tests: `tidy_test.go`, against a stateful fake paperless
+that applies paperless-ngx 3.0's tag-tree rules.
+
+- **Read-only unless `TIDY_WRITES=true`.** :8080 has no login, and these are the first actions
+  here that delete things. `TIDY_VIEWER_USER` (default `mcp-reader`) is the user the
+  "hidden from" finding and the grant-view fix are about.
+- Inventory: one pass over every root document (paperless-ngx 3.0's list leaves file-version rows
+  out) gives each object's count and newest `created`/`added`. Findings: no documents; near-duplicate
+  names (same name once case, punctuation, `&`/`and` and Inc/LLC/Co/The are dropped; an acronym equal
+  to another name's initials; one edit apart, two for long names); a matching rule that needs text
+  but has none (never matches); matching text that None/Automatic ignores; owned objects the viewer
+  cannot see; references to deleted objects.
+- References: paperless-ngx workflows (every trigger/action field that names a kind, plus custom
+  field queries and `assign_custom_fields_values`), saved views (filter rules, custom-field columns
+  and sort), mail rules, the inbox flag, and paperless-gpt's own config (`MANUAL_TAG`, `AUTO_TAG`,
+  `AUTO_TAG_COMPLETE`, `AUTO_OCR_TAG`, `FAIL_TAG`, `PDF_OCR_COMPLETE_TAG`, its AI workflows' tags and
+  custom fields, `custom_fields_selected_ids`). Merge and delete are refused while the source is
+  referenced, and also when the references could not be read: deleting an object silently drops it
+  from workflows. Renaming a tag paperless-gpt names in its config is refused too (it matches by name).
+- Merge A into B: log first (A's full JSON with matching, owner and permissions; every document's
+  before state), then for tags move A's children under B **before** moving documents (bulk
+  `modify_tags` removing A also removes A's descendants), bulk-edit the documents, read them back
+  (after state), re-query A, and delete A only when no document uses it; otherwise the action is
+  `partial` and A stays. A tag cannot be merged into its own descendant. Correspondent and document
+  type merges add an alias (`TidyAlias`): `tidyApplyAliases` adds merged-away names to the name maps
+  `UpdateDocuments` resolves LLM suggestions with, so the LLM saying "ACCU" lands on the merge target
+  instead of recreating it. A real object with that name always wins. Tag aliases do not exist: tag
+  suggestions are filtered against existing tags before `UpdateDocuments`.
+- bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
+  Document Updated workflows run on them; the merge preview lists the enabled ones.
+- Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes
+  back; it gets a new id), move child tags back, and put each document back: tags exactly as before by
+  per-document PATCH (a bulk "remove B" would strip B's descendants), other kinds by bulk edit.
+  Documents changed since are refused unless forced, and then skipped. Undo refuses when an object
+  with the old name exists again. Renames, matching changes and grants restore the logged values.
+  Not undone: an older alias that a merge re-pointed from A to B.
+- A trashed document that uses a merged or deleted object should lose it, since paperless-ngx clears
+  the reference on delete (inferred from its models, not tested); restoring it from the trash would
+  not bring it back. Version rows lose a merged tag the same way, which is harmless (they are not
+  shown).
+- Verified 2026-11-14 against a throwaway paperless-ngx 3.0 beta (the production image digest) seeded
+  with production's object names and matching rules and 193 dummy documents: every action, then every
+  undo, left objects, owners, permissions, matching, the tag tree and all document assignments
+  identical by name; an LLM-style suggestion of a merged-away correspondent name landed on the target
+  through `/api/update-documents`; LLM groups ran on local Ollama `qwen3:8b`. Not yet run against
+  production or with Gemini.
 
 ### Open items
 

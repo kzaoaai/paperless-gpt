@@ -651,6 +651,7 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 	for name, tagID := range availableTags {
 		idToTagName[tagID] = name
 	}
+	tidyApplyAliases(db, availableCorrespondents, availableDocumentTypes) // fork: Tidy merge aliases
 
 	// Build a field-id -> data_type map once per call, lazily — only fetch
 	// when at least one document has suggested custom fields, so users who

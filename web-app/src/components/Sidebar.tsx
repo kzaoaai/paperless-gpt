@@ -6,6 +6,7 @@ import {
   HomeIcon,
   Bars3Icon,
   QueueListIcon,
+  SwatchIcon,
 } from "@heroicons/react/24/outline";
 import classNames from "classnames";
 import React, { useEffect, useState } from "react";
@@ -70,6 +71,7 @@ const Sidebar: React.FC = () => {
       icon: QueueListIcon,
       title: "AI Workflows",
     },
+    { name: "tidy", path: "./tidy", icon: SwatchIcon, title: "Tidy" },
     {
       name: "settings",
       path: "./settings",
