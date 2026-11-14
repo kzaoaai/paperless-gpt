@@ -239,9 +239,9 @@ against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rule
 
 ### Open items
 
-- Production runs `1d87a5a` (deployed 2026-11-14: the Tidy page; rollback image
-  `:30ac1b16f0983fadf3d2593fc00fd7e25333e858`), with `TIDY_WRITES: "true"` in the compose since the
-  same day. A database backup taken right before writes were enabled is on the CT; the homelable
+- Production runs `59b98de` (deployed 2026-11-15: Tidy v1.1; rollback image
+  `:1d87a5ae567e28e605131e18072ec4fb4cee0cfd`, the Tidy page as first deployed 2026-11-14), with
+  `TIDY_WRITES: "true"` in the compose since 2026-11-14. No split has run in production yet. A database backup taken right before writes were enabled is on the CT; the homelable
   page's Changelog has the path and the restore command. Before it, `30ac1b1`
   (deployed 2026-10-31) with `GOOGLEAI_THINKING_LEVEL=low`; before that,
   `9068471` (deployed 2026-10-25): the 2026-10-25 upstream sync on top of the Vertex backend, on
