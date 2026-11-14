@@ -242,8 +242,8 @@ against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rule
   identical by name; an LLM-style suggestion of a merged-away correspondent name landed on the target
   through `/api/update-documents`; LLM groups ran on local Ollama `qwen3:8b`. In production
   (2026-11-14, read-only): the inventory reads 1,199 documents in about 2 s, a merge preview works,
-  and Gemini's duplicate groups matched the name rules (one pair). Writes were enabled the same
-  day; no Tidy action had run in production when this was written.
+  and Gemini's duplicate groups matched the name rules (one pair). Writes are on since that day;
+  merges and deletes have run in production, a split has not.
 
 ### Open items
 
