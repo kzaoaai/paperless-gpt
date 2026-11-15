@@ -276,11 +276,11 @@ paperless-ngx, no container and no model (its header has the command; skipped un
 
 ### Open items
 
-- Production runs `20b4767` (deployed 2026-11-15: fill missing tags and types, splits always leave the
-  bucket out; rollback image `:6c44ced5627bd7ee41e1ede5d169c36fe003d062`; earlier Tidy builds `03162b2`,
-  `59b98de`, `1d87a5a`), with
+- Production runs `7ee17ad` (deployed 2026-11-15: Fill lets a suggested tag be left out and a
+  document be ignored; rollback image `:20b4767cbd30c06d030e461f550353e49809a3a3`; earlier Tidy builds
+  `6c44ced`, `03162b2`, `59b98de`, `1d87a5a`), with
   `TIDY_WRITES: "true"` in the compose since 2026-11-14. Splits have run in production (Gemini's
-  answers were sensible when the bucket was left out); no fill run yet. A database backup taken right before writes were enabled is on the CT; the homelable
+  answers were sensible when the bucket was left out); one fill run has, not applied. A database backup taken right before writes were enabled is on the CT; the homelable
   page's Changelog has the path and the restore command. Before it, `30ac1b1`
   (deployed 2026-10-31) with `GOOGLEAI_THINKING_LEVEL=low`; before that,
   `9068471` (deployed 2026-10-25): the 2026-10-25 upstream sync on top of the Vertex backend, on
