@@ -296,11 +296,11 @@ paperless-ngx, no container and no model (its header has the command; skipped un
 
 ### Open items
 
-- Production runs `c846093` (deployed 2026-11-15: Fill labels the last run and hides rows filled
-  since; rollback image `:db9990f0922689ca73141adadf4e2c4f19dc4378`; earlier Tidy builds
+- Production runs `341b7f2` (deployed 2026-11-15: an ignored document leaves Fill's table;
+  rollback image `:c846093c02c2a0d64d93e9fbf784386eec8bc2ab`; earlier Tidy builds `db9990f`,
   `262c118`, `7ee17ad`, `20b4767`, `6c44ced`, `03162b2`, `59b98de`, `1d87a5a`), with
   `TIDY_WRITES: "true"` in the compose since 2026-11-14. Splits have run in production (Gemini's
-  answers were sensible when the bucket was left out); three fill runs have, and part of the second was applied. A database backup taken right before writes were enabled is on the CT; the homelable
+  answers were sensible when the bucket was left out); three fill runs have, and the usable answers of the second and third were applied. A database backup taken right before writes were enabled is on the CT; the homelable
   page's Changelog has the path and the restore command. Before it, `30ac1b1`
   (deployed 2026-10-31) with `GOOGLEAI_THINKING_LEVEL=low`; before that,
   `9068471` (deployed 2026-10-25): the 2026-10-25 upstream sync on top of the Vertex backend, on
