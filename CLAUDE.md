@@ -163,7 +163,7 @@ Inventory and cleanup of paperless-ngx tags, correspondents, document types, sto
 custom fields. Go: `tidy_paperless.go` (API calls), `tidy_findings.go` (inventory, references,
 findings), `tidy_actions.go` (actions, log, undo, aliases), `tidy_routes.go` (`/api/tidy/...`),
 `tidy_llm.go` (LLM duplicate groups), `tidy_hygiene.go` (archive health, custom-field values),
-`tidy_split.go` (splitting a catch-all correspondent). Tests: `tidy_test.go` and `tidy_v11_test.go`,
+`tidy_split.go` (splitting a catch-all correspondent), `tidy_fill.go` (filling missing tags and types). Tests: `tidy_test.go` and `tidy_v11_test.go`,
 against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rules.
 
 - **Read-only unless `TIDY_WRITES=true`.** :8080 has no login, and these are the first actions
@@ -205,7 +205,8 @@ against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rule
 - Split a catch-all correspondent (`tidy_split.go`): a background run (one at a time, stoppable,
   stored in `tidy_split_runs`) asks the same correspondent prompt document processing uses
   (`getSuggestedCorrespondent` with `filterCorrespondentsForPrompt` and the blacklist) about each
-  document, by default with the bucket left out of the choices. The page groups the answers as
+  document, always with the bucket left out of the choices (an option to keep it in was removed:
+  two production runs had it off and got the bucket back for every document). The page groups the answers as
   `UpdateDocuments` would resolve them (case-insensitive, aliases): an existing correspondent, a new
   name (flagged when it looks like an existing one), or "stays" (the bucket itself, "Unknown"). A
   ticked group can be pointed at any existing correspondent instead. Applying is one `split` action:
@@ -217,6 +218,18 @@ against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rule
   by name; the new correspondent was owned by the API user with the viewer's grant. The prompt side
   has only run on a stub and on local Ollama, which crashed after 4 of 7 documents. Never test it
   against Ollama on AA's Mac: `qwen3:8b` ran the M4 out of memory and macOS killed his apps.
+- Fill missing tags and types (`tidy_fill.go`, "Fill missing tags and types…" under Archive health):
+  a background run, sharing the one-at-a-time lock with splits (`tidy_fill_runs`), takes documents
+  with no tags or no type, newest first, skipping any that carry `AUTO_TAG` or `AUTO_OCR_TAG`
+  (paperless-gpt fills those itself), optionally only the newest N. For each it runs
+  `generateSingleDocumentSuggestion` with only `GenerateTags` and/or `GenerateDocumentTypes` set,
+  so production's tag and type prompts answer and nothing else is asked. The page resolves names
+  to today's tags and types (case-insensitive; type aliases apply; tag names that match nothing are
+  shown struck through and dropped). Applying is one `fill` action: tags by bulk `modify_tags` add
+  (a child tag brings its ancestors, as paperless-ngx does), types by bulk set, only on documents
+  still missing them. Undo empties the tags and clears the type where the document still carries
+  exactly what the fill gave it. Verified 2026-11-15 on the test instance with stored answers (no
+  LLM): apply then undo left it identical by name.
 - bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
   Document Updated workflows run on them; the merge preview lists the enabled ones.
 - Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes

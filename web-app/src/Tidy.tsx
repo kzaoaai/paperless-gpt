@@ -12,6 +12,7 @@ import { useSearchParams } from "react-router-dom";
 import ActionLog from "./components/tidy/ActionLog";
 import MergeDialog from "./components/tidy/MergeDialog";
 import SplitDialog from "./components/tidy/SplitDialog";
+import FillDialog from "./components/tidy/FillDialog";
 import {
   Action,
   Finding,
@@ -68,6 +69,7 @@ const Tidy: React.FC = () => {
 
   const [mergeIds, setMergeIds] = useState<number[] | null>(null);
   const [splitRow, setSplitRow] = useState<Row | null>(null);
+  const [fillOpen, setFillOpen] = useState(false);
   const [renameRow, setRenameRow] = useState<Row | null>(null);
   const [renameTo, setRenameTo] = useState("");
   const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; run: () => Promise<unknown> } | null>(null);
@@ -165,6 +167,10 @@ const Tidy: React.FC = () => {
     }, `Merged ${groups.length} group(s)`);
   };
 
+  const missing = {
+    tags: inv?.hygiene?.find((h) => h.key === "no_tags")?.count ?? 0,
+    types: inv?.hygiene?.find((h) => h.key === "no_document_type")?.count ?? 0,
+  };
   const names = (ids: number[]) => ids.map((id) => byId.get(id)?.name ?? `#${id}`);
   const header = (key: SortKey, label: string, className?: string) => (
     <th className={classNames("px-2 py-2 font-medium", className)}>
@@ -352,9 +358,16 @@ const Tidy: React.FC = () => {
 
       {inv && (inv.hygiene ?? []).length > 0 && (
         <section className="space-y-2">
-          <h2 className="text-sm font-semibold">
-            Archive health <span className="font-normal text-muted">({inv.document_count} documents)</span>
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">
+              Archive health <span className="font-normal text-muted">({inv.document_count} documents)</span>
+            </h2>
+            {missing.tags + missing.types > 0 && (
+              <Button size="sm" variant="ghost" onClick={() => setFillOpen(true)}>
+                <SparklesIcon className="h-4 w-4" aria-hidden="true" /> Fill missing tags and types…
+              </Button>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {(inv.hygiene ?? []).map((h) => {
               const href = paperlessUrl && h.query ? `${paperlessUrl}/documents?${h.query}` : undefined;
@@ -711,6 +724,20 @@ const Tidy: React.FC = () => {
             )}
           </section>
         </>
+      )}
+
+      {inv && fillOpen && (
+        <FillDialog
+          missingTags={missing.tags}
+          missingTypes={missing.types}
+          writes={writes}
+          paperlessUrl={paperlessUrl}
+          onClose={() => setFillOpen(false)}
+          onDone={(m) => {
+            setFillOpen(false);
+            changed(m);
+          }}
+        />
       )}
 
       {inv && splitRow && (

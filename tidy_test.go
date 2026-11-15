@@ -247,16 +247,19 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 		switch body["method"] {
 		case "set_correspondent", "set_document_type", "set_storage_path":
 			field := strings.TrimPrefix(body["method"].(string), "set_")
-			id := int(params[field].(float64))
+			var ref *int
+			if v, ok := params[field].(float64); ok {
+				ref = ip(int(v))
+			}
 			for _, did := range ids {
 				d := f.docs[did]
 				switch field {
 				case "correspondent":
-					d.Correspondent = ip(id)
+					d.Correspondent = ref
 				case "document_type":
-					d.DocumentType = ip(id)
+					d.DocumentType = ref
 				case "storage_path":
-					d.StoragePath = ip(id)
+					d.StoragePath = ref
 				}
 			}
 		case "modify_tags":
@@ -411,7 +414,7 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 func newTestTidy(t *testing.T, f *fakePaperless) *tidyService {
 	db, err := InitializeTestDB()
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}))
+	require.NoError(t, db.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}))
 	return &tidyService{client: f.client(), db: db, writes: true, viewer: "mcp-reader",
 		configRefs: func() tidyConfigRefs {
 			return tidyConfigRefs{TagNames: map[string]string{"paperless-gpt": "AUTO_TAG"}, CustomFieldIDs: map[int]string{}}

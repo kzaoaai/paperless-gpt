@@ -25,7 +25,7 @@ func registerTidy(router *gin.Engine, api *gin.RouterGroup, app *App) {
 		return
 	}
 	if app.Database != nil {
-		if err := app.Database.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}); err != nil {
+		if err := app.Database.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}); err != nil {
 			log.Errorf("Tidy page disabled: migrating its tables failed: %v", err)
 			return
 		}
@@ -61,10 +61,29 @@ func registerTidy(router *gin.Engine, api *gin.RouterGroup, app *App) {
 			candidates := filterCorrespondentsForPrompt(names, content, title, correspondentPromptLimit)
 			return app.getSuggestedCorrespondent(ctx, content, title, candidates, correspondentBlackList, nil)
 		}
+		// Only the tag and type generators of document processing, so nothing
+		// else about the document is asked or changed.
+		s.fillSuggest = func(ctx context.Context, docID int, wantTags, wantType bool) (string, []string, string, error) {
+			doc, err := app.Client.GetDocument(ctx, docID)
+			if err != nil {
+				return "", nil, "", err
+			}
+			req := GenerateSuggestionsRequest{Documents: []Document{doc}, GenerateTags: wantTags, GenerateDocumentTypes: wantType}
+			genCtx, err := app.prepareSuggestionGenerationContext(ctx, req)
+			if err != nil {
+				return doc.Title, nil, "", err
+			}
+			sug, err := app.generateSingleDocumentSuggestion(ctx, req, doc, genCtx, log.WithField("tidy", "fill"))
+			if err != nil {
+				return doc.Title, nil, "", err
+			}
+			return doc.Title, sug.SuggestedTags, sug.SuggestedDocumentType, nil
+		}
 	}
 	// A run left "running" by a restart can never finish.
 	if app.Database != nil {
 		app.Database.Model(&TidySplitRun{}).Where("status = ?", "running").Update("status", "stopped")
+		app.Database.Model(&TidyFillRun{}).Where("status = ?", "running").Update("status", "stopped")
 	}
 	s.routes(api.Group("/tidy"))
 
@@ -216,7 +235,9 @@ func (s *tidyService) routes(g *gin.RouterGroup) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		run, err := s.startSplit(c.Request.Context(), req.CorrespondentID, req.ExcludeSelf)
+		// The bucket is always left out of the choices: with it in, the model
+		// can simply answer the bucket again (two runs did exactly that).
+		run, err := s.startSplit(c.Request.Context(), req.CorrespondentID, true)
 		tidyRespond(c, run, err)
 	})
 	g.GET("/split/runs", func(c *gin.Context) {
@@ -240,6 +261,48 @@ func (s *tidyService) routes(g *gin.RouterGroup) {
 	})
 	g.POST("/split/stop", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"stopping": s.stopSplit()})
+	})
+	g.POST("/fill/stop", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"stopping": s.stopSplit()})
+	})
+	g.POST("/fill/start", func(c *gin.Context) {
+		var req struct {
+			Limit int `json:"limit"`
+		}
+		_ = c.ShouldBindJSON(&req)
+		run, err := s.startFill(c.Request.Context(), req.Limit)
+		tidyRespond(c, run, err)
+	})
+	g.GET("/fill/runs", func(c *gin.Context) {
+		runs := []TidyFillRun{}
+		if s.db != nil {
+			if err := s.db.Omit("results").Order("id desc").Limit(20).Find(&runs).Error; err != nil {
+				tidyRespond(c, nil, err)
+				return
+			}
+		}
+		c.JSON(http.StatusOK, runs)
+	})
+	g.GET("/fill/runs/:id", func(c *gin.Context) {
+		id, err := strconv.Atoi(c.Param("id"))
+		if err != nil || id <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad run id"})
+			return
+		}
+		view, err := s.fillView(c.Request.Context(), uint(id))
+		tidyRespond(c, view, err)
+	})
+	g.POST("/fill/apply", func(c *gin.Context) {
+		var req struct {
+			RunID uint                `json:"run_id"`
+			Items []tidyFillApplyItem `json:"items"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		a, err := s.applyFill(c.Request.Context(), req.RunID, req.Items)
+		tidyRespondAction(c, a, err)
 	})
 	g.POST("/split/apply", func(c *gin.Context) {
 		var req struct {

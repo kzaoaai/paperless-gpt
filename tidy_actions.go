@@ -75,6 +75,9 @@ type tidyActionDetail struct {
 	// Split: correspondents the split created, and the run it came from.
 	Created  []int `json:"created,omitempty"`
 	SplitRun uint  `json:"split_run,omitempty"`
+	// Fill: documents that got a type (Docs holds the ones that got tags).
+	TypeDocs []tidyDocChange `json:"type_docs,omitempty"`
+	FillRun  uint            `json:"fill_run,omitempty"`
 }
 
 // tidyRefusal is an action Tidy will not take; the page shows why.
@@ -103,7 +106,8 @@ type tidyService struct {
 	cacheMu sync.Mutex
 	cache   *tidyInventory
 
-	suggest     tidySuggestFunc // paperless-gpt's correspondent prompt; nil without an LLM
+	suggest     tidySuggestFunc     // paperless-gpt's correspondent prompt; nil without an LLM
+	fillSuggest tidyFillSuggestFunc // its tag and document-type prompts; nil without an LLM
 	splitMu     sync.Mutex
 	splitCancel context.CancelFunc // set while a split run is going
 }
@@ -823,6 +827,8 @@ func (s *tidyService) undo(ctx context.Context, id uint, force bool) (*TidyActio
 		note, err = s.undoPermissions(ctx, &a, &d)
 	case "split":
 		note, err = s.undoSplit(ctx, &a, &d, force)
+	case "fill":
+		note, err = s.undoFill(ctx, &d, force)
 	default:
 		err = tidyRefuse("cannot undo %q", a.Action)
 	}

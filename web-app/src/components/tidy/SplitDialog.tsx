@@ -26,7 +26,6 @@ const SplitDialog: React.FC<SplitDialogProps> = ({ bucket, rows, writes, paperle
   const [run, setRun] = useState<SplitRun | null>(null);
   const [view, setView] = useState<SplitView | null>(null);
   const [loading, setLoading] = useState(true);
-  const [excludeSelf, setExcludeSelf] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Record<string, boolean>>({});
@@ -67,7 +66,7 @@ const SplitDialog: React.FC<SplitDialogProps> = ({ bucket, rows, writes, paperle
     setError(null);
     try {
       setView(null);
-      setRun(await tidyApi.splitStart(bucket.id, excludeSelf));
+      setRun(await tidyApi.splitStart(bucket.id));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -121,15 +120,7 @@ const SplitDialog: React.FC<SplitDialogProps> = ({ bucket, rows, writes, paperle
 
           {!loading && (!run || run.status !== "running") && (
             <div className="flex flex-wrap items-center gap-3 rounded-md border border-line px-3 py-2">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  className="accent-[var(--color-primary)]"
-                  checked={excludeSelf}
-                  onChange={(e) => setExcludeSelf(e.target.checked)}
-                />
-                Leave “{bucket.name}” out of the choices
-              </label>
+              <span className="text-muted">“{bucket.name}” itself is left out of the choices.</span>
               <Button size="sm" variant={run ? "secondary" : "primary"} onClick={start} loading={busy}>
                 {run ? "Ask again" : "Ask the LLM"} ({bucket.doc_count} calls, about ${cost})
               </Button>

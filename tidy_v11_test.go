@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -276,4 +277,75 @@ func TestTidyDeleteManyAndUndo(t *testing.T) {
 		}
 	}
 	assert.True(t, found)
+}
+
+func TestTidyFillTargets(t *testing.T) {
+	docs := []tidyDoc{
+		{ID: 1, Added: "2026-01-01T00:00:00Z", Tags: []int{}, DocumentType: ip(9)},  // needs tags
+		{ID: 2, Added: "2026-03-01T00:00:00Z", Tags: []int{5}},                      // needs a type
+		{ID: 3, Added: "2026-02-01T00:00:00Z", Tags: []int{}},                       // needs both
+		{ID: 4, Added: "2026-04-01T00:00:00Z", Tags: []int{5}, DocumentType: ip(9)}, // complete
+		{ID: 5, Added: "2026-05-01T00:00:00Z", Tags: []int{77}},                     // in paperless-gpt's queue
+	}
+	got := tidyFillTargets(docs, []int{77}, 0)
+	require.Len(t, got, 3)
+	assert.Equal(t, []int{2, 3, 1}, []int{got[0].DocID, got[1].DocID, got[2].DocID}, "newest first")
+	assert.Equal(t, tidyFillResult{DocID: 3, AskTags: true, AskType: true}, got[1])
+	assert.Len(t, tidyFillTargets(docs, []int{77}, 2), 2, "limit")
+}
+
+func TestTidyFillApplyAndUndo(t *testing.T) {
+	f := newFakePaperless(t)
+	f.addObject("tags", 10, "Taxes", nil)
+	f.addObject("tags", 11, "Unit 5", map[string]any{"parent": 12.0})
+	f.addObject("tags", 12, "Real Estate", nil)
+	f.addObject("document_types", 20, "Invoice / Receipt", nil)
+	f.addDoc(tidyDoc{ID: 1, Added: "2026-01-01T00:00:00Z", DocumentType: ip(20)})
+	f.addDoc(tidyDoc{ID: 2, Added: "2026-02-01T00:00:00Z", Tags: []int{10}})
+	f.addDoc(tidyDoc{ID: 3, Added: "2026-03-01T00:00:00Z"})
+	s := newTestTidy(t, f)
+	asked := map[int][2]bool{}
+	s.fillSuggest = func(ctx context.Context, id int, wantTags, wantType bool) (string, []string, string, error) {
+		asked[id] = [2]bool{wantTags, wantType}
+		return "doc " + strconv.Itoa(id), []string{"taxes", "Unit 5", "Made Up"}, "invoice / receipt", nil
+	}
+	ctx := context.Background()
+	run, err := s.startFill(ctx, 0)
+	require.NoError(t, err)
+	waitSplit(t, s)
+	assert.Equal(t, map[int][2]bool{1: {true, false}, 2: {false, true}, 3: {true, true}}, asked, "only the missing fields are asked")
+	assert.Empty(t, f.writes, "a run changes nothing")
+
+	view, err := s.fillView(ctx, run.ID)
+	require.NoError(t, err)
+	items := map[int]tidyFillItem{}
+	for _, it := range view.Items {
+		items[it.DocID] = it
+	}
+	assert.Equal(t, []int{10, 11}, items[1].TagIDs, "names resolve case-insensitively")
+	assert.Equal(t, []string{"Made Up"}, items[1].UnknownTags, "a name that matches no tag is dropped")
+	assert.Empty(t, items[1].TypeName, "type not asked for doc 1")
+	assert.Equal(t, 20, items[2].TypeID)
+	assert.Equal(t, "Invoice / Receipt", items[2].TypeName)
+
+	f.docs[3].DocumentType = ip(20) // typed by hand since the run
+	a, err := s.applyFill(ctx, run.ID, []tidyFillApplyItem{
+		{DocID: 1, TagIDs: items[1].TagIDs},
+		{DocID: 2, TypeID: 20},
+		{DocID: 3, TagIDs: []int{10}, TypeID: 20},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "done", a.Status)
+	assert.Equal(t, []int{10, 11, 12}, f.docs[1].Tags, "a child tag brings its parent, as in paperless-ngx")
+	assert.Equal(t, 20, *f.docs[2].DocumentType)
+	assert.Equal(t, []int{10}, f.docs[3].Tags)
+	assert.Contains(t, a.Summary, "skipped 1 that have them now")
+
+	u, err := s.undo(ctx, a.ID, false)
+	require.NoError(t, err)
+	assert.Empty(t, f.docs[1].Tags)
+	assert.Empty(t, f.docs[3].Tags)
+	assert.Nil(t, f.docs[2].DocumentType, "the filled type is taken off")
+	assert.Equal(t, 20, *f.docs[3].DocumentType, "a type set by hand stays")
+	assert.Contains(t, u.UndoNote, "tags off 2 and the type off 1")
 }

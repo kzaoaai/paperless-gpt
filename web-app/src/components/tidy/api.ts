@@ -155,6 +155,41 @@ export interface SplitView {
   failed: { doc_id: number; title: string; error?: string }[];
 }
 
+export interface FillRun {
+  id: number;
+  created_at: string;
+  status: "running" | "done" | "stopped";
+  total: number;
+  done: number;
+  calls: number;
+}
+
+export interface FillItem {
+  doc_id: number;
+  title: string;
+  ask_tags: boolean;
+  tag_names: string[];
+  tag_ids: number[];
+  unknown_tags: string[];
+  has_tags_now: boolean;
+  ask_type: boolean;
+  type_name?: string;
+  type_id?: number;
+  has_type_now: boolean;
+  error?: string;
+}
+
+export interface FillView {
+  run: FillRun;
+  items: FillItem[];
+}
+
+export interface FillApplyItem {
+  doc_id: number;
+  tag_ids: number[];
+  type_id: number;
+}
+
 export interface SplitApplyGroup {
   doc_ids: number[];
   target_id: number;
@@ -245,8 +280,12 @@ export const tidyApi = {
   undo: (id: number, force = false) => call<Action>("POST", `actions/${id}/undo`, { force }),
   deleteAlias: (id: number) => call<unknown>("DELETE", `aliases/${id}`),
   llmGroups: (kind: Kind) => call<LLMGroup[]>("POST", "llm-groups", { kind }),
-  splitStart: (correspondent_id: number, exclude_self: boolean) =>
-    call<SplitRun>("POST", "split/start", { correspondent_id, exclude_self }),
+  splitStart: (correspondent_id: number) => call<SplitRun>("POST", "split/start", { correspondent_id }),
+  fillStart: (limit: number) => call<FillRun>("POST", "fill/start", { limit }),
+  fillRuns: () => call<FillRun[]>("GET", "fill/runs"),
+  fillView: (id: number) => call<FillView>("GET", `fill/runs/${id}`),
+  fillStop: () => call<{ stopping: boolean }>("POST", "fill/stop"),
+  fillApply: (run_id: number, items: FillApplyItem[]) => call<Action>("POST", "fill/apply", { run_id, items }),
   splitRuns: () => call<SplitRun[]>("GET", "split/runs"),
   splitView: (id: number) => call<SplitView>("GET", `split/runs/${id}`),
   splitStop: () => call<{ stopping: boolean }>("POST", "split/stop"),
