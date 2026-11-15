@@ -249,6 +249,10 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   on, Tick/Untick and the bulk ignore act on the rows shown, and the footer says how many ticked
   documents the filter hides. It is all in `FillDialog.tsx` (`fillMatches`, `tagsCell`,
   `typeCell`); checked the same way on the demo server.
+  The Fill and Split dialogs use `Modal`'s `focus` size, whose panel is a flex column under the
+  title: their body must be `flex min-h-0 flex-1 flex-col`. With `h-full` the body was as tall as
+  the whole panel, so a list longer than the dialog pushed the footer and its Apply button out of
+  sight (found in production 2026-11-15). When checking a dialog, look at it with a long list.
 - bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
   Document Updated workflows run on them; the merge preview lists the enabled ones.
 - Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes

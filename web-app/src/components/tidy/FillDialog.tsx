@@ -247,7 +247,8 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
 
   return (
     <Modal open onClose={busy ? () => {} : onClose} title="Fill missing tags and types" size="focus">
-      <div className="flex h-full flex-col">
+      {/* Fills what the title leaves of the panel; "h-full" would be the whole panel and push the footer out of sight. */}
+      <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4 text-sm">
           <p className="text-muted">
             paperless-gpt's own tag and document-type prompts are asked about each document that has no tags or no type,

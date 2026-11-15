@@ -110,7 +110,8 @@ const SplitDialog: React.FC<SplitDialogProps> = ({ bucket, rows, writes, paperle
 
   return (
     <Modal open onClose={busy ? () => {} : onClose} title={`Split “${bucket.name}”`} size="focus">
-      <div className="flex h-full flex-col">
+      {/* Fills what the title leaves of the panel; "h-full" would be the whole panel and push the footer out of sight. */}
+      <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4 text-sm">
           <p className="text-muted">
             paperless-gpt's correspondent prompt is asked about each of the {bucket.doc_count} documents, the way document
