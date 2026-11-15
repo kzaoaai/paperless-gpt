@@ -638,7 +638,9 @@ func tidyBuildInventory(objects map[string][]tidyObject, docs []tidyDoc, refs []
 					hidden = append(hidden, o.ID)
 				}
 			}
-			if row.DocCount == 0 {
+			// Queue and marker tags (the inbox, paperless-gpt's triggers) sit at
+			// zero documents by design; only list what nothing uses.
+			if row.DocCount == 0 && len(row.References) == 0 {
 				unused = append(unused, o.ID)
 			}
 			if o.MatchingAlgorithm != nil {
@@ -662,7 +664,7 @@ func tidyBuildInventory(objects map[string][]tidyObject, docs []tidyDoc, refs []
 
 		if len(unused) > 0 {
 			findings = append(findings, tidyFinding{Kind: kind, Type: "unused", IDs: unused,
-				Detail: fmt.Sprintf("%d with no documents", len(unused))})
+				Detail: fmt.Sprintf("%d with no documents that nothing uses", len(unused))})
 		}
 		for _, g := range tidyNearDuplicates(objs) {
 			findings = append(findings, tidyFinding{Kind: kind, Type: "near_duplicate", IDs: g, Detail: "Names that look like the same thing"})

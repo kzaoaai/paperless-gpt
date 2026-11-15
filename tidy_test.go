@@ -711,6 +711,7 @@ func TestTidyInventoryFindings(t *testing.T) {
 	f.addObject("correspondents", 418, "Northwind Office Supplies", map[string]any{"owner": 2, "permissions": perm()})
 	f.addObject("correspondents", 420, "Example Bank", map[string]any{"owner": 2, "permissions": perm(3)})
 	f.addObject("tags", 1, "Real Estate", nil)
+	f.addObject("tags", 2, "Inbox", map[string]any{"is_inbox_tag": true}) // empty by design
 	f.addObject("custom_fields", 24, "Tax Year", nil)
 	f.addDoc(tidyDoc{ID: 1, Correspondent: ip(21), Created: "2025-03-01", Added: "2025-03-02T00:00:00Z", Tags: []int{1}})
 	f.addDoc(tidyDoc{ID: 2, Correspondent: ip(21), Created: "2026-01-05", Added: "2025-12-31T00:00:00Z"})
@@ -756,9 +757,12 @@ func TestTidyInventoryFindings(t *testing.T) {
 	assert.Equal(t, "2025-12-31T00:00:00Z", union.LastAdded)
 	assert.Equal(t, 0, accu.DocCount)
 	assert.Equal(t, []tidyWorkflowInfo{{ID: 1, Name: "AI", Enabled: true}}, inv.UpdatedWorkflows)
+	assert.Empty(t, byType["tags/unused"], "an empty tag that is in use (the inbox) is not listed")
 	var realEstate tidyRow
 	for _, r := range inv.Objects["tags"] {
-		realEstate = r
+		if r.ID == 1 {
+			realEstate = r
+		}
 	}
 	require.Len(t, realEstate.References, 1)
 	assert.Equal(t, "workflow", realEstate.References[0].Source)

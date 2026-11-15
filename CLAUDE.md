@@ -170,7 +170,8 @@ against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rule
   here that delete things. `TIDY_VIEWER_USER` (default `mcp-reader`) is the user the
   "hidden from" finding and the grant-view fix are about.
 - Inventory: one pass over every root document (paperless-ngx 3.0's list leaves file-version rows
-  out) gives each object's count and newest `created`/`added`. Findings: no documents; near-duplicate
+  out) gives each object's count and newest `created`/`added`. Findings: no documents and nothing
+  using it (queue and marker tags are empty by design, so in-use ones are not listed); near-duplicate
   names (same name once case, punctuation, `&`/`and` and Inc/LLC/Co/The are dropped; an acronym equal
   to another name's initials; one edit apart, two for long names); a matching rule that needs text
   but has none (never matches); matching text that None/Automatic ignores; owned objects the viewer
