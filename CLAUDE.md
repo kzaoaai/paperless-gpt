@@ -276,18 +276,20 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   through `/api/update-documents`; LLM groups ran on local Ollama `qwen3:8b`. In production
   (2026-11-14, read-only): the inventory reads 1,199 documents in about 2 s, a merge preview works,
   and Gemini's duplicate groups matched the name rules (one pair). Writes are on since that day;
-  merges, deletes, matching fixes and splits have run in production. One fill run has (20 documents,
-  Gemini): about two thirds of its tag suggestions were right, and the wrong ones were on documents no
-  tag fits, so production's tag prompt now says to answer NONE when none fits; nothing from that run
-  was applied.
+  merges, deletes, matching fixes and splits have run in production. Two fill runs have (20 documents
+  each, Gemini), neither applied: the first got about half its tag answers right and the wrong ones
+  were on documents no tag fits, so production's tag prompt now says to answer NONE when none fits;
+  the second, under that rule, got about two thirds right and still guessed a tag for some manuals,
+  so the prompt also says which documents the warranty tag is for and that a manual usually needs
+  no tag. That second rule has not been tried yet.
 
 ### Open items
 
-- Production runs `7ee17ad` (deployed 2026-11-15: Fill lets a suggested tag be left out and a
-  document be ignored; rollback image `:20b4767cbd30c06d030e461f550353e49809a3a3`; earlier Tidy builds
-  `6c44ced`, `03162b2`, `59b98de`, `1d87a5a`), with
+- Production runs `262c118` (deployed 2026-11-15: Fill's table has an ID column, sorting and a
+  filter; rollback image `:7ee17ad8ad0ee6d3b7182f2ccc9dcaaf2cc05d18`; earlier Tidy builds
+  `20b4767`, `6c44ced`, `03162b2`, `59b98de`, `1d87a5a`), with
   `TIDY_WRITES: "true"` in the compose since 2026-11-14. Splits have run in production (Gemini's
-  answers were sensible when the bucket was left out); one fill run has, not applied. A database backup taken right before writes were enabled is on the CT; the homelable
+  answers were sensible when the bucket was left out); two fill runs have, neither applied. A database backup taken right before writes were enabled is on the CT; the homelable
   page's Changelog has the path and the restore command. Before it, `30ac1b1`
   (deployed 2026-10-31) with `GOOGLEAI_THINKING_LEVEL=low`; before that,
   `9068471` (deployed 2026-10-25): the 2026-10-25 upstream sync on top of the Vertex backend, on
