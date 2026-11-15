@@ -287,11 +287,13 @@ func TestTidyFillTargets(t *testing.T) {
 		{ID: 4, Added: "2026-04-01T00:00:00Z", Tags: []int{5}, DocumentType: ip(9)}, // complete
 		{ID: 5, Added: "2026-05-01T00:00:00Z", Tags: []int{77}},                     // in paperless-gpt's queue
 	}
-	got := tidyFillTargets(docs, []int{77}, 0)
+	got := tidyFillTargets(docs, []int{77}, nil, 0)
 	require.Len(t, got, 3)
 	assert.Equal(t, []int{2, 3, 1}, []int{got[0].DocID, got[1].DocID, got[2].DocID}, "newest first")
 	assert.Equal(t, tidyFillResult{DocID: 3, AskTags: true, AskType: true}, got[1])
-	assert.Len(t, tidyFillTargets(docs, []int{77}, 2), 2, "limit")
+	assert.Len(t, tidyFillTargets(docs, []int{77}, nil, 2), 2, "limit")
+	left := tidyFillTargets(docs, []int{77}, map[int]bool{3: true}, 0)
+	assert.Equal(t, []int{2, 1}, []int{left[0].DocID, left[1].DocID}, "an ignored document is not asked about")
 }
 
 func TestTidyFillApplyAndUndo(t *testing.T) {
@@ -348,4 +350,76 @@ func TestTidyFillApplyAndUndo(t *testing.T) {
 	assert.Nil(t, f.docs[2].DocumentType, "the filled type is taken off")
 	assert.Equal(t, 20, *f.docs[3].DocumentType, "a type set by hand stays")
 	assert.Contains(t, u.UndoNote, "tags off 2 and the type off 1")
+}
+
+func TestTidyFillIgnoreList(t *testing.T) {
+	f := newFakePaperless(t)
+	f.addObject("tags", 10, "Taxes", nil)
+	f.addObject("tags", 11, "Payment", nil)
+	f.addObject("document_types", 20, "Manual", nil)
+	f.addDoc(tidyDoc{ID: 1, Added: "2026-01-01T00:00:00Z", DocumentType: ip(20)})
+	f.addDoc(tidyDoc{ID: 2, Added: "2026-02-01T00:00:00Z", DocumentType: ip(20)})
+	f.addDoc(tidyDoc{ID: 3, Added: "2026-03-01T00:00:00Z"})
+	s := newTestTidy(t, f)
+	var asked []int
+	s.fillSuggest = func(ctx context.Context, id int, wantTags, wantType bool) (string, []string, string, error) {
+		asked = append(asked, id)
+		return "doc " + strconv.Itoa(id), []string{"payment", "Taxes", "PAYMENT"}, "", nil
+	}
+	ctx := context.Background()
+
+	st, err := s.fillStatus(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, tidyFillStatus{Documents: 3, WithoutTags: 3, WithoutType: 1, Calls: 4, Ignored: []TidyFillIgnore{}}, *st)
+
+	n, err := s.ignoreFill([]tidyFillIgnoreItem{{DocID: 2, Title: " A manual "}, {DocID: 2, Title: "again"}, {DocID: 0}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "ignoring twice keeps one row")
+	assert.Empty(t, f.writes, "the ignore list changes nothing in paperless-ngx")
+
+	st, err = s.fillStatus(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, st.Documents)
+	assert.Equal(t, 3, st.Calls)
+	require.Len(t, st.Ignored, 1)
+	assert.Equal(t, "A manual", st.Ignored[0].Title)
+
+	run, err := s.startFill(ctx, 0)
+	require.NoError(t, err)
+	waitSplit(t, s)
+	assert.ElementsMatch(t, []int{1, 3}, asked, "an ignored document is not asked about")
+
+	_, err = s.ignoreFill([]tidyFillIgnoreItem{{DocID: 1, Title: "doc 1"}})
+	require.NoError(t, err)
+	view, err := s.fillView(ctx, run.ID)
+	require.NoError(t, err)
+	items := map[int]tidyFillItem{}
+	for _, it := range view.Items {
+		items[it.DocID] = it
+	}
+	assert.True(t, items[1].Ignored, "ignored after the run")
+	assert.False(t, items[3].Ignored)
+	assert.Equal(t, []tidyFillTag{{ID: 11, Name: "Payment"}, {ID: 10, Name: "Taxes"}}, items[3].Tags, "each tag once, id with its name")
+
+	// Only some of the suggested tags are kept on the page.
+	a, err := s.applyFill(ctx, run.ID, []tidyFillApplyItem{{DocID: 3, TagIDs: []int{10}}})
+	require.NoError(t, err)
+	assert.Equal(t, "done", a.Status)
+	assert.Equal(t, []int{10}, f.docs[3].Tags)
+
+	n, err = s.unignoreFill([]int{1, 2, 99})
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+	st, err = s.fillStatus(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 3, st.Documents, "1 and 2 are asked about again; 3 has a tag now and still lacks a type")
+	assert.Equal(t, 3, st.Calls)
+	assert.Empty(t, st.Ignored)
+
+	_, err = s.ignoreFill([]tidyFillIgnoreItem{{DocID: 1}, {DocID: 2}, {DocID: 3}})
+	require.NoError(t, err)
+	_, err = s.startFill(ctx, 0)
+	var refusal *tidyRefusal
+	require.ErrorAs(t, err, &refusal)
+	assert.Contains(t, refusal.Message, "ignored")
 }

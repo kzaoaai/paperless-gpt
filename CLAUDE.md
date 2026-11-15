@@ -165,6 +165,10 @@ findings), `tidy_actions.go` (actions, log, undo, aliases), `tidy_routes.go` (`/
 `tidy_llm.go` (LLM duplicate groups), `tidy_hygiene.go` (archive health, custom-field values),
 `tidy_split.go` (splitting a catch-all correspondent), `tidy_fill.go` (filling missing tags and types). Tests: `tidy_test.go` and `tidy_v11_test.go`,
 against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rules.
+`tidy_demo_test.go` serves the real routes and the built web app against that fake, with fixed
+stub answers in place of the LLM, on one local port: the way to try the page with no
+paperless-ngx, no container and no model (its header has the command; skipped unless
+`TIDY_DEMO_ADDR` is set).
 
 - **Read-only unless `TIDY_WRITES=true`.** :8080 has no login, and these are the first actions
   here that delete things. `TIDY_VIEWER_USER` (default `mcp-reader`) is the user the
@@ -230,6 +234,14 @@ against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rule
   still missing them. Undo empties the tags and clears the type where the document still carries
   exactly what the fill gave it. Verified 2026-11-15 on the test instance with stored answers (no
   LLM): apply then undo left it identical by name.
+  On the page each suggested tag is a button: a click leaves it out, and only the kept ones are
+  sent (`tags` in the run view pairs each id with its name; `tag_ids` is sorted, so it does not
+  line up with `tag_names`). A document can be ignored, per row or all rows with nothing
+  suggested at once: `tidy_fill_ignores` holds its id and title, runs skip it, the dialog lists
+  the ignored ones with "Un-ignore", and `GET /fill/status` gives the counts a run would ask about
+  plus that list. The ignore list is paperless-gpt's own, changes nothing in paperless-ngx and
+  works in read-only mode. Checked 2026-11-15 in a browser on the demo server (stub answers):
+  dropping tags, ignore, bulk ignore, un-ignore and apply.
 - bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
   Document Updated workflows run on them; the merge preview lists the enabled ones.
 - Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes
@@ -257,7 +269,10 @@ against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rule
   through `/api/update-documents`; LLM groups ran on local Ollama `qwen3:8b`. In production
   (2026-11-14, read-only): the inventory reads 1,199 documents in about 2 s, a merge preview works,
   and Gemini's duplicate groups matched the name rules (one pair). Writes are on since that day;
-  merges, deletes, matching fixes and a split have run in production; a fill has not.
+  merges, deletes, matching fixes and splits have run in production. One fill run has (20 documents,
+  Gemini): about two thirds of its tag suggestions were right, and the wrong ones were on documents no
+  tag fits, so production's tag prompt now says to answer NONE when none fits; nothing from that run
+  was applied.
 
 ### Open items
 

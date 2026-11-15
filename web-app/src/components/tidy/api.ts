@@ -164,10 +164,16 @@ export interface FillRun {
   calls: number;
 }
 
+export interface FillTag {
+  id: number;
+  name: string;
+}
+
 export interface FillItem {
   doc_id: number;
   title: string;
   ask_tags: boolean;
+  tags: FillTag[];
   tag_names: string[];
   tag_ids: number[];
   unknown_tags: string[];
@@ -176,7 +182,23 @@ export interface FillItem {
   type_name?: string;
   type_id?: number;
   has_type_now: boolean;
+  ignored: boolean;
   error?: string;
+}
+
+export interface FillIgnored {
+  doc_id: number;
+  title: string;
+  created_at: string;
+}
+
+/** What a run would ask about now, and the documents Fill leaves alone. */
+export interface FillStatus {
+  documents: number;
+  without_tags: number;
+  without_type: number;
+  calls: number;
+  ignored: FillIgnored[];
 }
 
 export interface FillView {
@@ -286,6 +308,10 @@ export const tidyApi = {
   fillView: (id: number) => call<FillView>("GET", `fill/runs/${id}`),
   fillStop: () => call<{ stopping: boolean }>("POST", "fill/stop"),
   fillApply: (run_id: number, items: FillApplyItem[]) => call<Action>("POST", "fill/apply", { run_id, items }),
+  fillStatus: () => call<FillStatus>("GET", "fill/status"),
+  fillIgnore: (items: { doc_id: number; title: string }[]) =>
+    call<{ ignored: number }>("POST", "fill/ignore", { items }),
+  fillUnignore: (doc_ids: number[]) => call<{ unignored: number }>("POST", "fill/unignore", { doc_ids }),
   splitRuns: () => call<SplitRun[]>("GET", "split/runs"),
   splitView: (id: number) => call<SplitView>("GET", `split/runs/${id}`),
   splitStop: () => call<{ stopping: boolean }>("POST", "split/stop"),

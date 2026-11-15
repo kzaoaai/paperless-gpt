@@ -4,7 +4,8 @@ package main
 // paperless-gpt's own tag and document-type prompts (nothing else: no title,
 // date, correspondent or custom fields) about every document that has no tags
 // or no type, and stores the answers. The page lists them; only ticked ones
-// are applied, as one logged action that undo reverses.
+// are applied, as one logged action that undo reverses. A document on the
+// ignore list is never asked about until it is taken off it.
 
 import (
 	"context"
@@ -13,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"gorm.io/gorm/clause"
 )
 
 // TidyFillRun is one pass of the tag and type prompts.
@@ -25,6 +28,28 @@ type TidyFillRun struct {
 	Done      int       `json:"done"`
 	Calls     int       `json:"calls"` // LLM prompts the run needs: one per missing field
 	Results   string    `gorm:"type:TEXT" json:"-"`
+}
+
+// TidyFillIgnore is a document a person told Fill to leave alone. The list is
+// paperless-gpt's own: nothing about the document changes in paperless-ngx.
+type TidyFillIgnore struct {
+	DocID     int       `gorm:"primaryKey;autoIncrement:false" json:"doc_id"`
+	Title     string    `json:"title"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type tidyFillIgnoreItem struct {
+	DocID int    `json:"doc_id"`
+	Title string `json:"title"`
+}
+
+// tidyFillStatus is what a run would do now, and the ignore list.
+type tidyFillStatus struct {
+	Documents   int              `json:"documents"`
+	WithoutTags int              `json:"without_tags"`
+	WithoutType int              `json:"without_type"`
+	Calls       int              `json:"calls"`
+	Ignored     []TidyFillIgnore `json:"ignored"`
 }
 
 type tidyFillResult struct {
@@ -41,19 +66,26 @@ type tidyFillResult struct {
 // document and returns its title and the suggested names.
 type tidyFillSuggestFunc func(ctx context.Context, docID int, wantTags, wantType bool) (title string, tags []string, docType string, err error)
 
+type tidyFillTag struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
 type tidyFillItem struct {
-	DocID       int      `json:"doc_id"`
-	Title       string   `json:"title"`
-	AskTags     bool     `json:"ask_tags"`
-	TagNames    []string `json:"tag_names"`
-	TagIDs      []int    `json:"tag_ids"`
-	UnknownTags []string `json:"unknown_tags"` // suggested names that match no tag
-	HasTagsNow  bool     `json:"has_tags_now"`
-	AskType     bool     `json:"ask_type"`
-	TypeName    string   `json:"type_name,omitempty"`
-	TypeID      int      `json:"type_id,omitempty"`
-	HasTypeNow  bool     `json:"has_type_now"`
-	Error       string   `json:"error,omitempty"`
+	DocID       int           `json:"doc_id"`
+	Title       string        `json:"title"`
+	AskTags     bool          `json:"ask_tags"`
+	Tags        []tidyFillTag `json:"tags"` // the suggested tags that exist, each droppable on the page
+	TagNames    []string      `json:"tag_names"`
+	TagIDs      []int         `json:"tag_ids"`
+	UnknownTags []string      `json:"unknown_tags"` // suggested names that match no tag
+	HasTagsNow  bool          `json:"has_tags_now"`
+	AskType     bool          `json:"ask_type"`
+	TypeName    string        `json:"type_name,omitempty"`
+	TypeID      int           `json:"type_id,omitempty"`
+	HasTypeNow  bool          `json:"has_type_now"`
+	Ignored     bool          `json:"ignored"`
+	Error       string        `json:"error,omitempty"`
 }
 
 type tidyFillView struct {
@@ -67,15 +99,15 @@ type tidyFillApplyItem struct {
 	TypeID int   `json:"type_id"`
 }
 
-// tidyFillTargets picks the documents to ask about: no tags or no type, and
-// not waiting in one of paperless-gpt's queues (it fills those itself).
-// Newest first, at most limit when limit > 0.
-func tidyFillTargets(docs []tidyDoc, queueTagIDs []int, limit int) []tidyFillResult {
+// tidyFillTargets picks the documents to ask about: no tags or no type, not
+// waiting in one of paperless-gpt's queues (it fills those itself) and not on
+// the ignore list. Newest first, at most limit when limit > 0.
+func tidyFillTargets(docs []tidyDoc, queueTagIDs []int, ignored map[int]bool, limit int) []tidyFillResult {
 	sorted := append([]tidyDoc(nil), docs...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Added > sorted[j].Added })
 	var out []tidyFillResult
 	for _, d := range sorted {
-		if tidyHasAny(d.Tags, queueTagIDs) {
+		if ignored[d.ID] || tidyHasAny(d.Tags, queueTagIDs) {
 			continue
 		}
 		askTags, askType := len(d.Tags) == 0, d.DocumentType == nil
@@ -90,6 +122,98 @@ func tidyFillTargets(docs []tidyDoc, queueTagIDs []int, limit int) []tidyFillRes
 	return out
 }
 
+// fillIgnoredIDs is the ignore list as a set.
+func (s *tidyService) fillIgnoredIDs() (map[int]bool, error) {
+	out := map[int]bool{}
+	if s.db == nil {
+		return out, nil
+	}
+	var ids []int
+	if err := s.db.Model(&TidyFillIgnore{}).Pluck("doc_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
+}
+
+// fillTargets lists the documents a run would ask about now.
+func (s *tidyService) fillTargets(ctx context.Context, limit int) ([]tidyFillResult, error) {
+	docs, err := tidyFetchDocs(ctx, s.client, "")
+	if err != nil {
+		return nil, err
+	}
+	tags, err := tidyFetchObjects(ctx, s.client, "tags")
+	if err != nil {
+		return nil, err
+	}
+	ignored, err := s.fillIgnoredIDs()
+	if err != nil {
+		return nil, err
+	}
+	cfg := s.configRefs()
+	queue := append(tidyTagIDsByName(tags, cfg.AutoTag), tidyTagIDsByName(tags, cfg.OCRTag)...)
+	return tidyFillTargets(docs, queue, ignored, limit), nil
+}
+
+// fillStatus counts what a run would ask about and lists the ignored documents.
+func (s *tidyService) fillStatus(ctx context.Context) (*tidyFillStatus, error) {
+	targets, err := s.fillTargets(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	st := &tidyFillStatus{Documents: len(targets), Ignored: []TidyFillIgnore{}}
+	for _, t := range targets {
+		if t.AskTags {
+			st.WithoutTags++
+			st.Calls++
+		}
+		if t.AskType {
+			st.WithoutType++
+			st.Calls++
+		}
+	}
+	if s.db != nil {
+		if err := s.db.Order("created_at desc, doc_id desc").Find(&st.Ignored).Error; err != nil {
+			return nil, err
+		}
+	}
+	return st, nil
+}
+
+// ignoreFill puts documents on the ignore list; one already there stays as it is.
+func (s *tidyService) ignoreFill(items []tidyFillIgnoreItem) (int, error) {
+	if s.db == nil {
+		return 0, tidyRefuse("no database")
+	}
+	added := 0
+	for _, it := range items {
+		if it.DocID <= 0 {
+			continue
+		}
+		row := TidyFillIgnore{DocID: it.DocID, Title: strings.TrimSpace(it.Title)}
+		res := s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+		if res.Error != nil {
+			return added, res.Error
+		}
+		added += int(res.RowsAffected)
+	}
+	return added, nil
+}
+
+// unignoreFill takes documents off the ignore list.
+func (s *tidyService) unignoreFill(ids []int) (int, error) {
+	if s.db == nil {
+		return 0, tidyRefuse("no database")
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	res := s.db.Where("doc_id IN ?", ids).Delete(&TidyFillIgnore{})
+	return int(res.RowsAffected), res.Error
+}
+
 func (s *tidyService) startFill(ctx context.Context, limit int) (*TidyFillRun, error) {
 	if s.fillSuggest == nil {
 		return nil, tidyRefuse("no LLM is configured")
@@ -102,19 +226,12 @@ func (s *tidyService) startFill(ctx context.Context, limit int) (*TidyFillRun, e
 	if s.splitCancel != nil {
 		return nil, tidyRefuse("another LLM run is going; stop it or wait for it")
 	}
-	docs, err := tidyFetchDocs(ctx, s.client, "")
+	targets, err := s.fillTargets(ctx, limit)
 	if err != nil {
 		return nil, err
 	}
-	tags, err := tidyFetchObjects(ctx, s.client, "tags")
-	if err != nil {
-		return nil, err
-	}
-	cfg := s.configRefs()
-	queue := append(tidyTagIDsByName(tags, cfg.AutoTag), tidyTagIDsByName(tags, cfg.OCRTag)...)
-	targets := tidyFillTargets(docs, queue, limit)
 	if len(targets) == 0 {
-		return nil, tidyRefuse("every document has tags and a type")
+		return nil, tidyRefuse("nothing to ask about: every document has tags and a type, waits in paperless-gpt's queue, or is ignored")
 	}
 	calls := 0
 	for _, t := range targets {
@@ -200,7 +317,8 @@ func (s *tidyService) loadFillRun(id uint) (*TidyFillRun, []tidyFillResult, erro
 
 // fillView resolves a run's suggested names to today's tags and types, the
 // way UpdateDocuments would (case-insensitive; names that match nothing are
-// dropped and listed), and marks documents that got tags or a type since.
+// dropped and listed), and marks documents that got tags or a type since and
+// documents that are on the ignore list.
 func (s *tidyService) fillView(ctx context.Context, id uint) (*tidyFillView, error) {
 	run, results, err := s.loadFillRun(id)
 	if err != nil {
@@ -234,15 +352,23 @@ func (s *tidyService) fillView(ctx context.Context, id uint) (*tidyFillView, err
 	for _, d := range current {
 		now[d.ID] = d
 	}
+	ignored, err := s.fillIgnoredIDs()
+	if err != nil {
+		return nil, err
+	}
 	view := &tidyFillView{Run: *run, Items: make([]tidyFillItem, 0, len(results))}
 	for _, r := range results {
 		it := tidyFillItem{DocID: r.DocID, Title: r.Title, AskTags: r.AskTags, AskType: r.AskType, Error: r.Error,
-			TagNames: []string{}, TagIDs: []int{}, UnknownTags: []string{}}
+			Ignored: ignored[r.DocID], Tags: []tidyFillTag{}, TagNames: []string{}, TagIDs: []int{}, UnknownTags: []string{}}
 		if d, ok := now[r.DocID]; ok {
 			it.HasTagsNow, it.HasTypeNow = len(d.Tags) > 0, d.DocumentType != nil
 		}
 		for _, name := range r.Tags {
 			if canonical, id, ok := lookupTagID(tagIDs, name); ok {
+				if tidyHasAny(it.TagIDs, []int{id}) {
+					continue // the same tag suggested twice
+				}
+				it.Tags = append(it.Tags, tidyFillTag{ID: id, Name: canonical})
 				it.TagNames = append(it.TagNames, canonical)
 				it.TagIDs = append(it.TagIDs, id)
 			} else if strings.TrimSpace(name) != "" {

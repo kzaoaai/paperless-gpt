@@ -414,7 +414,7 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 func newTestTidy(t *testing.T, f *fakePaperless) *tidyService {
 	db, err := InitializeTestDB()
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}))
+	require.NoError(t, db.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}))
 	return &tidyService{client: f.client(), db: db, writes: true, viewer: "mcp-reader",
 		configRefs: func() tidyConfigRefs {
 			return tidyConfigRefs{TagNames: map[string]string{"paperless-gpt": "AUTO_TAG"}, CustomFieldIDs: map[int]string{}}

@@ -25,7 +25,7 @@ func registerTidy(router *gin.Engine, api *gin.RouterGroup, app *App) {
 		return
 	}
 	if app.Database != nil {
-		if err := app.Database.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}); err != nil {
+		if err := app.Database.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}); err != nil {
 			log.Errorf("Tidy page disabled: migrating its tables failed: %v", err)
 			return
 		}
@@ -291,6 +291,34 @@ func (s *tidyService) routes(g *gin.RouterGroup) {
 		}
 		view, err := s.fillView(c.Request.Context(), uint(id))
 		tidyRespond(c, view, err)
+	})
+	g.GET("/fill/status", func(c *gin.Context) {
+		st, err := s.fillStatus(c.Request.Context())
+		tidyRespond(c, st, err)
+	})
+	// The ignore list is paperless-gpt's own and changes nothing in
+	// paperless-ngx, so it works in read-only mode too.
+	g.POST("/fill/ignore", func(c *gin.Context) {
+		var req struct {
+			Items []tidyFillIgnoreItem `json:"items"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		n, err := s.ignoreFill(req.Items)
+		tidyRespond(c, gin.H{"ignored": n}, err)
+	})
+	g.POST("/fill/unignore", func(c *gin.Context) {
+		var req struct {
+			DocIDs []int `json:"doc_ids"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		n, err := s.unignoreFill(req.DocIDs)
+		tidyRespond(c, gin.H{"unignored": n}, err)
 	})
 	g.POST("/fill/apply", func(c *gin.Context) {
 		var req struct {
