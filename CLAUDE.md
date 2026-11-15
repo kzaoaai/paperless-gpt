@@ -249,6 +249,9 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   on, Tick/Untick and the bulk ignore act on the rows shown, and the footer says how many ticked
   documents the filter hides. It is all in `FillDialog.tsx` (`fillMatches`, `tagsCell`,
   `typeCell`); checked the same way on the demo server.
+  The dialog opens on the last run's answers and says so ("Answers from the last run … A new
+  run replaces them."); rows filled since that run are left out until "Show N already filled"
+  is clicked (`isFilled`). Checked on the demo server: apply, reopen, toggle.
   The Fill and Split dialogs use `Modal`'s `focus` size, whose panel is a flex column under the
   title: their body must be `flex min-h-0 flex-1 flex-col`. With `h-full` the body was as tall as
   the whole panel, so a list longer than the dialog pushed the footer and its Apply button out of

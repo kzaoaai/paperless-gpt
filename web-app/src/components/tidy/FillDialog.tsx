@@ -39,6 +39,9 @@ const typeCell = (i: FillItem): CellText => {
   return i.type_id ? { rank: 0, text: i.type_name ?? "" } : { rank: 1, text: i.type_name || "none suggested" };
 };
 
+/** Nothing left to decide: everything the run asked about has been filled since. */
+const isFilled = (i: FillItem) => (!i.ask_tags || i.has_tags_now) && (!i.ask_type || i.has_type_now);
+
 const sortCell = (i: FillItem, key: SortKey): CellText =>
   key === "tags" ? tagsCell(i) : key === "type" ? typeCell(i) : { rank: i.title ? 0 : 1, text: i.title };
 
@@ -71,6 +74,8 @@ const fillMatches = (i: FillItem, query: string): boolean => {
  * tag can be left out by clicking it, and a document can be put on an ignore
  * list so later runs skip it. The table sorts by any column and filters by
  * words or by a list of ids; "Tick" and the bulk ignore act on the rows shown.
+ * The dialog opens on the last run's answers, labelled as such, and leaves out
+ * the rows that have been filled since unless asked to show them.
  */
 const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writes, paperlessUrl, onClose, onDone }) => {
   const [run, setRun] = useState<FillRun | null>(null);
@@ -84,6 +89,7 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
   const [dropped, setDropped] = useState<Record<number, number[]>>({});
   const [showIgnored, setShowIgnored] = useState(false);
   const [filter, setFilter] = useState("");
+  const [showFilled, setShowFilled] = useState(false);
   // A run lists the newest documents first, which is the highest id first.
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "id", desc: true });
 
@@ -136,8 +142,11 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
   };
 
   const items = useMemo(() => view?.items ?? [], [view]);
+  const filledCount = useMemo(() => items.filter(isFilled).length, [items]);
+  // The rows there is still something to decide about, plus the filled ones when asked for.
+  const open = useMemo(() => (showFilled ? items : items.filter((i) => !isFilled(i))), [items, showFilled]);
   const shown = useMemo(() => {
-    const list = items.filter((i) => fillMatches(i, filter));
+    const list = open.filter((i) => fillMatches(i, filter));
     const dir = sort.desc ? -1 : 1;
     return [...list].sort((a, b) => {
       if (sort.key === "id") return (a.doc_id - b.doc_id) * dir;
@@ -147,7 +156,7 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
       // Rows that say the same keep the newest first, in either direction.
       return byCell * dir || b.doc_id - a.doc_id;
     });
-  }, [items, filter, sort]);
+  }, [open, filter, sort]);
   const filtering = filter.trim() !== "";
   // The ignore list is the truth once it has loaded; before that, the run's own flag.
   const ignoredIds = status ? new Set(status.ignored.map((x) => x.doc_id)) : null;
@@ -322,10 +331,10 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
 
           {view && (
             <>
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="space-y-2">
                 <p className="text-xs text-muted">
-                  Run {view.run.id} from {new Date(view.run.created_at).toLocaleString()}: {view.run.status},{" "}
-                  {view.run.done} of {view.run.total} documents.
+                  Answers from the last run (run {view.run.id}, {new Date(view.run.created_at).toLocaleString()};{" "}
+                  {view.run.status}, {view.run.done} of {view.run.total} documents). A new run replaces them.
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
                   <input
@@ -339,8 +348,14 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                   />
                   {filtering && (
                     <span className="text-xs text-muted">
-                      {shown.length} of {items.length} shown
+                      {shown.length} of {open.length} shown
                     </span>
+                  )}
+                  <span className="ml-auto" />
+                  {filledCount > 0 && (
+                    <Button size="sm" variant="ghost" onClick={() => setShowFilled(!showFilled)}>
+                      {showFilled ? "Hide" : "Show"} {filledCount} already filled
+                    </Button>
                   )}
                   {empty.length > 0 && (
                     <Button
@@ -375,7 +390,9 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                     {shown.length === 0 && (
                       <tr>
                         <td colSpan={5} className="px-2 py-3 text-muted">
-                          No document matches the filter.
+                          {filtering
+                            ? "No document matches the filter."
+                            : "Every document this run asked about has been filled since."}
                         </td>
                       </tr>
                     )}
