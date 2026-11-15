@@ -257,13 +257,15 @@ against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rule
   through `/api/update-documents`; LLM groups ran on local Ollama `qwen3:8b`. In production
   (2026-11-14, read-only): the inventory reads 1,199 documents in about 2 s, a merge preview works,
   and Gemini's duplicate groups matched the name rules (one pair). Writes are on since that day;
-  merges and deletes have run in production, a split has not.
+  merges, deletes, matching fixes and a split have run in production; a fill has not.
 
 ### Open items
 
-- Production runs `6c44ced` (deployed 2026-11-15: the no-documents finding skips in-use objects; rollback
-  image `:03162b20e3980874f8d7b5cada010bc3fd4a0e0f`; earlier Tidy builds `59b98de`, `1d87a5a`), with
-  `TIDY_WRITES: "true"` in the compose since 2026-11-14. No split has run in production yet. A database backup taken right before writes were enabled is on the CT; the homelable
+- Production runs `20b4767` (deployed 2026-11-15: fill missing tags and types, splits always leave the
+  bucket out; rollback image `:6c44ced5627bd7ee41e1ede5d169c36fe003d062`; earlier Tidy builds `03162b2`,
+  `59b98de`, `1d87a5a`), with
+  `TIDY_WRITES: "true"` in the compose since 2026-11-14. Splits have run in production (Gemini's
+  answers were sensible when the bucket was left out); no fill run yet. A database backup taken right before writes were enabled is on the CT; the homelable
   page's Changelog has the path and the restore command. Before it, `30ac1b1`
   (deployed 2026-10-31) with `GOOGLEAI_THINKING_LEVEL=low`; before that,
   `9068471` (deployed 2026-10-25): the 2026-10-25 upstream sync on top of the Vertex backend, on
