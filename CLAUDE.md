@@ -242,6 +242,13 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   plus that list. The ignore list is paperless-gpt's own, changes nothing in paperless-ngx and
   works in read-only mode. Checked 2026-11-15 in a browser on the demo server (stub answers):
   dropping tags, ignore, bulk ignore, un-ignore and apply.
+  The table has its own ID column and sorts by ID, title, suggested tags or type (a click on the
+  heading; rows that say the same keep the newest first). One filter field covers all four: words
+  separated by spaces must all be in the row, a comma separates alternatives, one number also
+  matches the id (`#12` only the id), and several numbers alone are a list of ids. With a filter
+  on, Tick/Untick and the bulk ignore act on the rows shown, and the footer says how many ticked
+  documents the filter hides. It is all in `FillDialog.tsx` (`fillMatches`, `tagsCell`,
+  `typeCell`); checked the same way on the demo server.
 - bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
   Document Updated workflows run on them; the merge preview lists the enabled ones.
 - Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Button from "../ui/Button";
 import Modal from "../ui/Modal";
 import { FillApplyItem, FillItem, FillRun, FillStatus, FillView, tidyApi } from "./api";
@@ -16,12 +16,61 @@ interface FillDialogProps {
 const CENTS_PER_CALL = 0.3;
 const TRY_FIRST = 20;
 
+type SortKey = "id" | "title" | "tags" | "type";
+
+interface CellText {
+  /** 0 a suggestion, 1 nothing suggested, 2 filled since the run, 3 never asked. */
+  rank: number;
+  text: string;
+}
+
+/** What a row's Tags cell says: the order sorting uses and the words the filter matches. */
+const tagsCell = (i: FillItem): CellText => {
+  if (!i.ask_tags) return { rank: 3, text: "has tags" };
+  if (i.has_tags_now) return { rank: 2, text: "tagged since" };
+  const names = [...i.tags.map((t) => t.name), ...i.unknown_tags].join(", ");
+  return i.tags.length > 0 ? { rank: 0, text: names } : { rank: 1, text: `${names} none suggested`.trim() };
+};
+
+/** The same for the Type cell. */
+const typeCell = (i: FillItem): CellText => {
+  if (!i.ask_type) return { rank: 3, text: "has a type" };
+  if (i.has_type_now) return { rank: 2, text: "typed since" };
+  return i.type_id ? { rank: 0, text: i.type_name ?? "" } : { rank: 1, text: i.type_name || "none suggested" };
+};
+
+const sortCell = (i: FillItem, key: SortKey): CellText =>
+  key === "tags" ? tagsCell(i) : key === "type" ? typeCell(i) : { rank: i.title ? 0 : 1, text: i.title };
+
+/**
+ * Whether a row passes the filter. Words separated by spaces must all be in
+ * the row's title, tags, type or error; a comma separates alternatives. One
+ * number also matches the document's id exactly ("#12" matches only the id),
+ * and several numbers alone are a list of ids, whatever separates them.
+ */
+const fillMatches = (i: FillItem, query: string): boolean => {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const id = String(i.doc_id);
+  const isNumber = (w: string) => /^#?\d+$/.test(w);
+  const words = q.split(/[\s,]+/).filter(Boolean);
+  if (words.length > 1 && words.every(isNumber)) return words.some((w) => w.replace("#", "") === id);
+  const text = [i.title, tagsCell(i).text, typeCell(i).text, i.error ?? ""].join("\n").toLowerCase();
+  const has = (w: string) =>
+    w.startsWith("#") && isNumber(w) ? w.slice(1) === id : (isNumber(w) && w === id) || text.includes(w);
+  return q.split(",").some((alternative) => {
+    const ws = alternative.split(/\s+/).filter(Boolean);
+    return ws.length > 0 && ws.every(has);
+  });
+};
+
 /**
  * Fills missing tags and document types: paperless-gpt's own tag and type
  * prompts are asked about each document that lacks them, in the background, and
  * only ticked answers are applied (one logged action, one undo). A suggested
  * tag can be left out by clicking it, and a document can be put on an ignore
- * list so later runs skip it.
+ * list so later runs skip it. The table sorts by any column and filters by
+ * words or by a list of ids; "Tick" and the bulk ignore act on the rows shown.
  */
 const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writes, paperlessUrl, onClose, onDone }) => {
   const [run, setRun] = useState<FillRun | null>(null);
@@ -34,6 +83,9 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
   const [tickType, setTickType] = useState<Record<number, boolean>>({});
   const [dropped, setDropped] = useState<Record<number, number[]>>({});
   const [showIgnored, setShowIgnored] = useState(false);
+  const [filter, setFilter] = useState("");
+  // A run lists the newest documents first, which is the highest id first.
+  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "id", desc: true });
 
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
 
@@ -74,6 +126,7 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
       setTickTags({});
       setTickType({});
       setDropped({});
+      setFilter("");
       setRun(await tidyApi.fillStart(limit));
     } catch (e) {
       fail(e);
@@ -82,7 +135,20 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
     }
   };
 
-  const items = view?.items ?? [];
+  const items = useMemo(() => view?.items ?? [], [view]);
+  const shown = useMemo(() => {
+    const list = items.filter((i) => fillMatches(i, filter));
+    const dir = sort.desc ? -1 : 1;
+    return [...list].sort((a, b) => {
+      if (sort.key === "id") return (a.doc_id - b.doc_id) * dir;
+      const ca = sortCell(a, sort.key);
+      const cb = sortCell(b, sort.key);
+      const byCell = ca.rank - cb.rank || ca.text.localeCompare(cb.text, undefined, { sensitivity: "base", numeric: true });
+      // Rows that say the same keep the newest first, in either direction.
+      return byCell * dir || b.doc_id - a.doc_id;
+    });
+  }, [items, filter, sort]);
+  const filtering = filter.trim() !== "";
   // The ignore list is the truth once it has loaded; before that, the run's own flag.
   const ignoredIds = status ? new Set(status.ignored.map((x) => x.doc_id)) : null;
   const isIgnored = (i: FillItem) => (ignoredIds ? ignoredIds.has(i.doc_id) : i.ignored);
@@ -96,11 +162,12 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
     ((i.ask_tags && !i.has_tags_now) || (i.ask_type && !i.has_type_now)) &&
     !(i.ask_tags && !i.has_tags_now && i.tags.length > 0) &&
     !(i.ask_type && !i.has_type_now && !!i.type_id);
-  const empty = items.filter(nothingSuggested);
+  const empty = shown.filter(nothingSuggested);
 
-  const tickAll = (on: boolean) => {
-    setTickTags(Object.fromEntries(items.filter(canTag).map((i) => [i.doc_id, on])));
-    setTickType(Object.fromEntries(items.filter(canType).map((i) => [i.doc_id, on])));
+  // Ticks the rows shown and leaves the ticks on rows the filter hides alone.
+  const tickShown = (on: boolean) => {
+    setTickTags({ ...tickTags, ...Object.fromEntries(shown.filter(canTag).map((i) => [i.doc_id, on])) });
+    setTickType({ ...tickType, ...Object.fromEntries(shown.filter(canType).map((i) => [i.doc_id, on])) });
   };
   const toggleTag = (docId: number, tagId: number) => {
     const now = dropped[docId] ?? [];
@@ -113,6 +180,8 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
       type_id: tickType[i.doc_id] && canType(i) ? i.type_id ?? 0 : 0,
     }))
     .filter((c) => c.tag_ids.length > 0 || c.type_id > 0);
+  const shownIds = new Set(shown.map((i) => i.doc_id));
+  const hiddenChosen = chosen.filter((c) => !shownIds.has(c.doc_id)).length;
 
   const apply = async () => {
     if (!view) return;
@@ -159,6 +228,22 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
       title || `#${id}`
     );
   const ignoredCount = status?.ignored.length ?? 0;
+  const header = (key: SortKey, label: string, className = "") => (
+    <th
+      className={`px-2 py-2 font-medium ${className}`}
+      aria-sort={sort.key === key ? (sort.desc ? "descending" : "ascending") : "none"}
+    >
+      <button
+        type="button"
+        className="hover:text-ink"
+        title={`Sort by ${label.toLowerCase()}`}
+        onClick={() => setSort((s) => ({ key, desc: s.key === key ? !s.desc : key === "id" }))}
+      >
+        {label}
+        {sort.key === key ? (sort.desc ? " ↓" : " ↑") : ""}
+      </button>
+    </th>
+  );
 
   return (
     <Modal open onClose={busy ? () => {} : onClose} title="Fill missing tags and types" size="focus">
@@ -241,21 +326,36 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                   Run {view.run.id} from {new Date(view.run.created_at).toLocaleString()}: {view.run.status},{" "}
                   {view.run.done} of {view.run.total} documents.
                 </p>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="search"
+                    aria-label="Filter the documents"
+                    title="Words must all be in the row; a comma separates alternatives. Several numbers are a list of ids."
+                    className="w-72 rounded-md border border-line bg-surface px-2 py-1 text-sm"
+                    placeholder="Filter: words, or ids like 12, 15"
+                    value={filter}
+                    onChange={(e) => setFilter(e.target.value)}
+                  />
+                  {filtering && (
+                    <span className="text-xs text-muted">
+                      {shown.length} of {items.length} shown
+                    </span>
+                  )}
                   {empty.length > 0 && (
                     <Button
                       size="sm"
                       variant="ghost"
                       onClick={() => ignore(empty.map((i) => ({ doc_id: i.doc_id, title: i.title })))}
                     >
-                      Ignore the {empty.length} with nothing suggested
+                      Ignore the {empty.length}
+                      {filtering ? " shown" : ""} with nothing suggested
                     </Button>
                   )}
-                  <Button size="sm" variant="ghost" onClick={() => tickAll(true)}>
-                    Tick all
+                  <Button size="sm" variant="ghost" onClick={() => tickShown(true)}>
+                    {filtering ? "Tick shown" : "Tick all"}
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => tickAll(false)}>
-                    Untick all
+                  <Button size="sm" variant="ghost" onClick={() => tickShown(false)}>
+                    {filtering ? "Untick shown" : "Untick all"}
                   </Button>
                 </div>
               </div>
@@ -263,22 +363,38 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                 <table className="w-full text-left text-sm">
                   <thead className="border-b border-line bg-surface-2 text-xs text-muted">
                     <tr>
-                      <th className="px-2 py-2 font-medium">Document</th>
-                      <th className="px-2 py-2 font-medium">Tags</th>
-                      <th className="px-2 py-2 font-medium">Type</th>
+                      {header("id", "ID", "w-16")}
+                      {header("title", "Document")}
+                      {header("tags", "Tags")}
+                      {header("type", "Type")}
                       <th className="px-2 py-2 font-medium" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-line">
-                    {items.map((i) => {
+                    {shown.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-2 py-3 text-muted">
+                          No document matches the filter.
+                        </td>
+                      </tr>
+                    )}
+                    {shown.map((i) => {
                       const ignored = isIgnored(i);
                       // Fade what an ignored row says, not its Un-ignore button.
                       const cell = `px-2 py-1.5 ${ignored ? "opacity-50" : ""}`;
                       return (
                         <tr key={i.doc_id} className="align-top">
+                          <td className={`${cell} whitespace-nowrap tabular-nums`}>
+                            {link(i.doc_id) ? (
+                              <a className="hover:underline" href={link(i.doc_id)} target="_blank" rel="noreferrer">
+                                {i.doc_id}
+                              </a>
+                            ) : (
+                              i.doc_id
+                            )}
+                          </td>
                           <td className={cell}>
-                            {docTitle(i.doc_id, i.title)}
-                            <span className="ml-1 text-xs text-faint">#{i.doc_id}</span>
+                            {i.title ? docTitle(i.doc_id, i.title) : <span className="text-faint">untitled</span>}
                             {i.error && <span className="block text-xs text-neg">{i.error}</span>}
                           </td>
                           <td className={cell}>
@@ -373,7 +489,12 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
           {!writes && <p className="text-warn">Read-only: set TIDY_WRITES=true to apply.</p>}
           {error && <p className="text-neg">{error}</p>}
         </div>
-        <div className="flex justify-end gap-2 border-t border-line px-6 py-4">
+        <div className="flex items-center justify-end gap-2 border-t border-line px-6 py-4">
+          {hiddenChosen > 0 && (
+            <span className="mr-auto text-xs text-warn">
+              {hiddenChosen} of the ticked documents {hiddenChosen === 1 ? "is" : "are"} hidden by the filter.
+            </span>
+          )}
           <Button onClick={onClose} disabled={busy}>
             Close
           </Button>
