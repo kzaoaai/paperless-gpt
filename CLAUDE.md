@@ -252,6 +252,9 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   The dialog opens on the last run's answers and says so ("Answers from the last run … A new
   run replaces them."); rows filled since that run are left out until "Show N already filled"
   is clicked (`isFilled`). Checked on the demo server: apply, reopen, toggle.
+  An ignored document leaves the table at once (it used to stay, faded, which read as "ignore
+  did nothing"); "Show N ignored" above the table is the one place they are listed, with
+  Un-ignore, which puts a document of the current run back in the table.
   The Fill and Split dialogs use `Modal`'s `focus` size, whose panel is a flex column under the
   title: their body must be `flex min-h-0 flex-1 flex-col`. With `h-full` the body was as tall as
   the whole panel, so a list longer than the dialog pushed the footer and its Apply button out of

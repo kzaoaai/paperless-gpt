@@ -75,7 +75,8 @@ const fillMatches = (i: FillItem, query: string): boolean => {
  * list so later runs skip it. The table sorts by any column and filters by
  * words or by a list of ids; "Tick" and the bulk ignore act on the rows shown.
  * The dialog opens on the last run's answers, labelled as such, and leaves out
- * the rows that have been filled since unless asked to show them.
+ * the rows that have been filled since unless asked to show them. An ignored
+ * document leaves the table at once; "Show N ignored" lists them all.
  */
 const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writes, paperlessUrl, onClose, onDone }) => {
   const [run, setRun] = useState<FillRun | null>(null);
@@ -142,9 +143,16 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
   };
 
   const items = useMemo(() => view?.items ?? [], [view]);
-  const filledCount = useMemo(() => items.filter(isFilled).length, [items]);
+  // The ignore list is the truth once it has loaded; before that, the run's own flag.
+  const ignoredIds = useMemo(() => (status ? new Set(status.ignored.map((x) => x.doc_id)) : null), [status]);
+  // The run's rows without the ignored ones, which are listed under "Show N ignored" instead.
+  const kept = useMemo(
+    () => items.filter((i) => !(ignoredIds ? ignoredIds.has(i.doc_id) : i.ignored)),
+    [items, ignoredIds]
+  );
+  const filledCount = useMemo(() => kept.filter(isFilled).length, [kept]);
   // The rows there is still something to decide about, plus the filled ones when asked for.
-  const open = useMemo(() => (showFilled ? items : items.filter((i) => !isFilled(i))), [items, showFilled]);
+  const open = useMemo(() => (showFilled ? kept : kept.filter((i) => !isFilled(i))), [kept, showFilled]);
   const shown = useMemo(() => {
     const list = open.filter((i) => fillMatches(i, filter));
     const dir = sort.desc ? -1 : 1;
@@ -158,8 +166,6 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
     });
   }, [open, filter, sort]);
   const filtering = filter.trim() !== "";
-  // The ignore list is the truth once it has loaded; before that, the run's own flag.
-  const ignoredIds = status ? new Set(status.ignored.map((x) => x.doc_id)) : null;
   const isIgnored = (i: FillItem) => (ignoredIds ? ignoredIds.has(i.doc_id) : i.ignored);
   const keptTags = (i: FillItem) => i.tags.filter((t) => !(dropped[i.doc_id] ?? []).includes(t.id));
   const canTag = (i: FillItem) => i.ask_tags && !i.has_tags_now && !isIgnored(i) && keptTags(i).length > 0;
@@ -263,8 +269,8 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
             paperless-gpt's own tag and document-type prompts are asked about each document that has no tags or no type,
             and nothing else about the document is asked or changed. Documents waiting in paperless-gpt's queue are
             skipped. Nothing changes until you tick answers and apply them; the change is logged and can be undone.
-            Click a suggested tag to leave it out. Ignore a document and it is not asked about again until you un-ignore
-            it.
+            Click a suggested tag to leave it out. An ignored document leaves the list and is not asked about again;
+            "Show ignored" lists them, with Un-ignore.
           </p>
           {loading && <p className="text-muted">Loading…</p>}
 
@@ -392,14 +398,12 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                         <td colSpan={5} className="px-2 py-3 text-muted">
                           {filtering
                             ? "No document matches the filter."
-                            : "Every document this run asked about has been filled since."}
+                            : "Nothing is left of this run: its documents have been filled or ignored."}
                         </td>
                       </tr>
                     )}
                     {shown.map((i) => {
-                      const ignored = isIgnored(i);
-                      // Fade what an ignored row says, not its Un-ignore button.
-                      const cell = `px-2 py-1.5 ${ignored ? "opacity-50" : ""}`;
+                      const cell = "px-2 py-1.5";
                       return (
                         <tr key={i.doc_id} className="align-top">
                           <td className={`${cell} whitespace-nowrap tabular-nums`}>
@@ -437,7 +441,6 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                                       <button
                                         key={t.id}
                                         type="button"
-                                        disabled={ignored}
                                         aria-pressed={!out}
                                         title={out ? "Left out. Click to put it back." : "Click to leave this tag out."}
                                         onClick={() => toggleTag(i.doc_id, t.id)}
@@ -482,19 +485,14 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                             )}
                           </td>
                           <td className="whitespace-nowrap px-2 py-1 text-right">
-                            {ignored ? (
-                              <Button size="sm" variant="ghost" onClick={() => unignore([i.doc_id])}>
-                                Un-ignore
-                              </Button>
-                            ) : (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => ignore([{ doc_id: i.doc_id, title: i.title }])}
-                              >
-                                Ignore
-                              </Button>
-                            )}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              title="Takes it off this list; it is not asked about again until you un-ignore it."
+                              onClick={() => ignore([{ doc_id: i.doc_id, title: i.title }])}
+                            >
+                              Ignore
+                            </Button>
                           </td>
                         </tr>
                       );
