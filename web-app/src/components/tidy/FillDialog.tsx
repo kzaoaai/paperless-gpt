@@ -70,10 +70,10 @@ const fillMatches = (i: FillItem, query: string): boolean => {
 /**
  * Fills missing tags and document types: paperless-gpt's own tag and type
  * prompts are asked about each document that lacks them, in the background, and
- * only ticked answers are applied (one logged action, one undo). A suggested
+ * only selected rows are applied (one logged action, one undo). A suggested
  * tag can be left out by clicking it, and a document can be put on an ignore
  * list so later runs skip it. The table sorts by any column and filters by
- * words or by a list of ids; "Tick" and the bulk ignore act on the rows shown.
+ * words or by a list of ids; the heading's box and the bulk ignore act on the rows shown.
  * The dialog opens on the last run's answers, labelled as such, and leaves out
  * the rows that have been filled since unless asked to show them. An ignored
  * document leaves the table at once; "Show N ignored" lists them all.
@@ -85,13 +85,13 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tickTags, setTickTags] = useState<Record<number, boolean>>({});
-  const [tickType, setTickType] = useState<Record<number, boolean>>({});
+  // Types left out by a click, the way a suggested tag is.
+  const [droppedType, setDroppedType] = useState<Record<number, boolean>>({});
   const [dropped, setDropped] = useState<Record<number, number[]>>({});
   const [showIgnored, setShowIgnored] = useState(false);
   const [filter, setFilter] = useState("");
   const [showFilled, setShowFilled] = useState(false);
-  // Rows picked with the first column's box, for the bulk Ignore; not the same as ticking an answer.
+  // Rows picked with the first column's box: what Apply fills and what the bulk Ignore ignores.
   const [selected, setSelected] = useState<Record<number, boolean>>({});
   const lastPicked = useRef<number | null>(null);
   // A run lists the newest documents first, which is the highest id first.
@@ -133,8 +133,7 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
     setError(null);
     try {
       setView(null);
-      setTickTags({});
-      setTickType({});
+      setDroppedType({});
       setDropped({});
       setFilter("");
       setSelected({});
@@ -183,11 +182,6 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
     !(i.ask_type && !i.has_type_now && !!i.type_id);
   const empty = shown.filter(nothingSuggested);
 
-  // Ticks the rows shown and leaves the ticks on rows the filter hides alone.
-  const tickShown = (on: boolean) => {
-    setTickTags({ ...tickTags, ...Object.fromEntries(shown.filter(canTag).map((i) => [i.doc_id, on])) });
-    setTickType({ ...tickType, ...Object.fromEntries(shown.filter(canType).map((i) => [i.doc_id, on])) });
-  };
   const toggleTag = (docId: number, tagId: number) => {
     const now = dropped[docId] ?? [];
     setDropped({ ...dropped, [docId]: now.includes(tagId) ? now.filter((t) => t !== tagId) : [...now, tagId] });
@@ -195,12 +189,10 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
   const chosen: FillApplyItem[] = items
     .map((i) => ({
       doc_id: i.doc_id,
-      tag_ids: tickTags[i.doc_id] && canTag(i) ? keptTags(i).map((t) => t.id) : [],
-      type_id: tickType[i.doc_id] && canType(i) ? i.type_id ?? 0 : 0,
+      tag_ids: selected[i.doc_id] && canTag(i) ? keptTags(i).map((t) => t.id) : [],
+      type_id: selected[i.doc_id] && canType(i) && !droppedType[i.doc_id] ? i.type_id ?? 0 : 0,
     }))
     .filter((c) => c.tag_ids.length > 0 || c.type_id > 0);
-  const shownIds = new Set(shown.map((i) => i.doc_id));
-  const hiddenChosen = chosen.filter((c) => !shownIds.has(c.doc_id)).length;
 
   const apply = async () => {
     if (!view) return;
@@ -239,6 +231,7 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
   // Selected rows that are still in the table: ignoring or filling one takes it out.
   const picked = open.filter((i) => selected[i.doc_id]);
   const pickedShown = shown.filter((i) => selected[i.doc_id]).length;
+  const hiddenPicked = picked.length - pickedShown;
   const ignorePicked = async () => {
     await ignore(picked.map((i) => ({ doc_id: i.doc_id, title: i.title })));
     setSelected({});
@@ -291,10 +284,10 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
           <p className="text-muted">
             paperless-gpt's own tag and document-type prompts are asked about each document that has no tags or no type,
             and nothing else about the document is asked or changed. Documents waiting in paperless-gpt's queue are
-            skipped. Nothing changes until you tick answers and apply them; the change is logged and can be undone.
-            Click a suggested tag to leave it out. An ignored document leaves the list and is not asked about again;
-            "Show ignored" lists them, with Un-ignore. The first column selects rows for one Ignore; Shift-click
-            selects a range.
+            skipped. Nothing changes until you select rows and apply them; the change is logged and can be undone.
+            The first column selects rows, for Apply or for Ignore; Shift-click selects a range. Click a suggested tag
+            or type to leave it out. An ignored document leaves the list and is not asked about again; "Show ignored"
+            lists them, with Un-ignore.
           </p>
           {loading && <p className="text-muted">Loading…</p>}
 
@@ -397,12 +390,6 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                       {filtering ? " shown" : ""} with nothing suggested
                     </Button>
                   )}
-                  <Button size="sm" variant="ghost" onClick={() => tickShown(true)}>
-                    {filtering ? "Tick shown" : "Tick all"}
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => tickShown(false)}>
-                    {filtering ? "Untick shown" : "Untick all"}
-                  </Button>
                 </div>
               </div>
               <div className="overflow-x-auto rounded-md border border-line">
@@ -413,7 +400,7 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                         <input
                           type="checkbox"
                           aria-label="Select every row shown"
-                          title="Select every row shown, for Ignore"
+                          title="Select every row shown"
                           className="accent-[var(--color-primary)]"
                           disabled={shown.length === 0}
                           checked={shown.length > 0 && pickedShown === shown.length}
@@ -475,14 +462,6 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                               <span className="text-xs text-faint">tagged since</span>
                             ) : (
                               <div className="flex items-start gap-2">
-                                <input
-                                  type="checkbox"
-                                  aria-label={`Apply the tags to ${i.title || `document ${i.doc_id}`}`}
-                                  className="mt-1 accent-[var(--color-primary)]"
-                                  disabled={!canTag(i)}
-                                  checked={!!tickTags[i.doc_id] && canTag(i)}
-                                  onChange={(e) => setTickTags({ ...tickTags, [i.doc_id]: e.target.checked })}
-                                />
                                 <span className="flex flex-wrap gap-1">
                                   {i.tags.map((t) => {
                                     const out = (dropped[i.doc_id] ?? []).includes(t.id);
@@ -519,18 +498,25 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                             ) : i.has_type_now ? (
                               <span className="text-xs text-faint">typed since</span>
                             ) : (
-                              <label className="flex items-start gap-2">
-                                <input
-                                  type="checkbox"
-                                  className="mt-1 accent-[var(--color-primary)]"
-                                  disabled={!canType(i)}
-                                  checked={!!tickType[i.doc_id] && canType(i)}
-                                  onChange={(e) => setTickType({ ...tickType, [i.doc_id]: e.target.checked })}
-                                />
-                                <span className={i.type_id ? "" : "text-xs text-faint line-through"}>
-                                  {i.type_name || "none suggested"}
-                                </span>
-                              </label>
+                              i.type_id ? (
+                                <button
+                                  type="button"
+                                  aria-pressed={!droppedType[i.doc_id]}
+                                  title={
+                                    droppedType[i.doc_id] ? "Left out. Click to put it back." : "Click to leave this type out."
+                                  }
+                                  onClick={() => setDroppedType({ ...droppedType, [i.doc_id]: !droppedType[i.doc_id] })}
+                                  className={`rounded px-1.5 py-0.5 text-left text-xs ${
+                                    droppedType[i.doc_id]
+                                      ? "border border-dashed border-line text-faint line-through"
+                                      : "bg-surface-2 hover:bg-line"
+                                  }`}
+                                >
+                                  {i.type_name}
+                                </button>
+                              ) : (
+                                <span className="text-xs text-faint line-through">{i.type_name || "none suggested"}</span>
+                              )
                             )}
                           </td>
                           <td className="whitespace-nowrap px-2 py-1 text-right">
@@ -555,9 +541,9 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
           {error && <p className="text-neg">{error}</p>}
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-line px-6 py-4">
-          {hiddenChosen > 0 && (
+          {hiddenPicked > 0 && (
             <span className="mr-auto text-xs text-warn">
-              {hiddenChosen} of the ticked documents {hiddenChosen === 1 ? "is" : "are"} hidden by the filter.
+              {hiddenPicked} of the selected documents {hiddenPicked === 1 ? "is" : "are"} hidden by the filter.
             </span>
           )}
           {picked.length > 0 && (
@@ -569,7 +555,7 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
             Close
           </Button>
           <Button variant="primary" onClick={apply} loading={busy} disabled={!writes || chosen.length === 0}>
-            Apply {chosen.length} ticked documents
+            Apply to {chosen.length} selected
           </Button>
         </div>
       </div>
