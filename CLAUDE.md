@@ -246,8 +246,8 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   heading; rows that say the same keep the newest first). One filter field covers all four: words
   separated by spaces must all be in the row, a comma separates alternatives, one number also
   matches the id (`#12` only the id), and several numbers alone are a list of ids. With a filter
-  on, Tick/Untick and the bulk ignore act on the rows shown, and the footer says how many ticked
-  documents the filter hides. It is all in `FillDialog.tsx` (`fillMatches`, `tagsCell`,
+  on, the heading's selection box takes only the rows shown, and the footer says how many
+  selected documents the filter hides. It is all in `FillDialog.tsx` (`fillMatches`, `tagsCell`,
   `typeCell`); checked the same way on the demo server.
   The dialog opens on the last run's answers and says so ("Answers from the last run … A new
   run replaces them."); rows filled since that run are left out until "Show N already filled"
