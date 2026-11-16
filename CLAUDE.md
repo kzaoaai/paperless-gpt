@@ -14,9 +14,11 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   not apply: nothing reads a root `dist/`.
 - Run the whole package. `TestTokenLimitInCreatedDateGeneration` panics when run on its own
   (it relies on a template another test sets) — an upstream test-isolation bug.
-- CI (`.github/workflows/docker-build-and-push.yml`) is the fork's own: one amd64 build that
-  pushes `ghcr.io/kzaoaai/paperless-gpt:latest` and `:<sha>` on every push to `main` that
-  changes something other than Markdown (`paths-ignore: '**.md'`), plus `workflow_dispatch`.
+- CI (`.github/workflows/docker-build-and-push.yml`) is the fork's own: on every push to `main`
+  that changes something other than Markdown (`paths-ignore: '**.md'`), plus `workflow_dispatch`,
+  the tests and one amd64 image build run side by side; the build pushes only `:<sha>`, and a
+  third job, `latest`, points `ghcr.io/kzaoaai/paperless-gpt:latest` at it once both passed. So
+  `:latest`, which production pulls, is always a tested image, and a deploy waits for the whole run.
   Images carry `org.opencontainers.image.version` (short commit) and `.revision` labels; the
   lab's image-update card reads them to show which commits an update spans. No arm64, manifest-merge or E2E jobs — AGENTS.md's CI section does not
   apply here.
