@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Button from "../ui/Button";
 import Modal from "../ui/Modal";
-import { FillApplyItem, FillItem, FillRun, FillStatus, FillView, tidyApi } from "./api";
+import { FillApplyItem, FillIgnored, FillItem, FillRun, FillStatus, FillView, tidyApi } from "./api";
 
 interface FillDialogProps {
   missingTags: number;
@@ -38,6 +38,18 @@ const typeCell = (i: FillItem): CellText => {
   if (i.has_type_now) return { rank: 2, text: "typed since" };
   return i.type_id ? { rank: 0, text: i.type_name ?? "" } : { rank: 1, text: i.type_name || "none suggested" };
 };
+
+/** What an ignored document lacks today, in words. */
+const lacks = (d: FillIgnored) =>
+  d.gone
+    ? "gone from paperless-ngx"
+    : d.no_tags && d.no_type
+      ? "tags and type"
+      : d.no_tags
+        ? "tags"
+        : d.no_type
+          ? "type"
+          : "nothing (filled since)";
 
 /** Nothing left to decide: everything the run asked about has been filled since. */
 const isFilled = (i: FillItem) => (!i.ask_tags || i.has_tags_now) && (!i.ask_type || i.has_type_now);
@@ -94,6 +106,9 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
   // Rows picked with the first column's box: what Apply fills and what the bulk Ignore ignores.
   const [selected, setSelected] = useState<Record<number, boolean>>({});
   const lastPicked = useRef<number | null>(null);
+  // The same kind of selection in the ignored list, for one Un-ignore.
+  const [ignPicked, setIgnPicked] = useState<Record<number, boolean>>({});
+  const lastIgn = useRef<number | null>(null);
   // A run lists the newest documents first, which is the highest id first.
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "id", desc: true });
 
@@ -237,6 +252,21 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
     setSelected({});
     lastPicked.current = null;
   };
+  const ignoredRows = status?.ignored ?? [];
+  const pickIgn = (docId: number, on: boolean, range: boolean) => {
+    const ids = ignoredRows.map((d) => d.doc_id);
+    const from = lastIgn.current === null ? -1 : ids.indexOf(lastIgn.current);
+    const to = ids.indexOf(docId);
+    const span = range && from >= 0 ? ids.slice(Math.min(from, to), Math.max(from, to) + 1) : [docId];
+    setIgnPicked({ ...ignPicked, ...Object.fromEntries(span.map((id) => [id, on])) });
+    lastIgn.current = docId;
+  };
+  const ignPickedIds = ignoredRows.filter((d) => ignPicked[d.doc_id]).map((d) => d.doc_id);
+  const ignCounts = {
+    tags: ignoredRows.filter((d) => !d.gone && d.no_tags).length,
+    type: ignoredRows.filter((d) => !d.gone && d.no_type).length,
+    filled: ignoredRows.filter((d) => !d.gone && !d.no_tags && !d.no_type).length,
+  };
   const unignore = async (ids: number[]) => {
     setError(null);
     try {
@@ -331,24 +361,78 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
 
           {showIgnored && status && ignoredCount > 0 && (
             <div className="rounded-md border border-line">
-              <p className="border-b border-line bg-surface-2 px-2 py-2 text-xs text-muted">
-                Ignored documents: Fill does not ask about these. Nothing about them is changed in paperless-ngx.
-              </p>
-              <ul className="divide-y divide-line">
-                {status.ignored.map((d) => (
-                  <li key={d.doc_id} className="flex items-center justify-between gap-3 px-2 py-1.5">
-                    <span>
-                      {docTitle(d.doc_id, d.title)}
-                      <span className="ml-1 text-xs text-faint">
-                        #{d.doc_id} · ignored {new Date(d.created_at).toLocaleDateString()}
-                      </span>
-                    </span>
-                    <Button size="sm" variant="ghost" onClick={() => unignore([d.doc_id])}>
-                      Un-ignore
-                    </Button>
-                  </li>
-                ))}
-              </ul>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-surface-2 px-2 py-2 text-xs text-muted">
+                <span>
+                  Ignored documents: Fill does not ask about these, and nothing about them is changed in paperless-ngx.
+                  Lacking tags: {ignCounts.tags} · lacking a type: {ignCounts.type}
+                  {ignCounts.filled > 0 && ` · filled since: ${ignCounts.filled}`}.
+                </span>
+                {ignPickedIds.length > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={async () => {
+                      await unignore(ignPickedIds);
+                      setIgnPicked({});
+                      lastIgn.current = null;
+                    }}
+                  >
+                    Un-ignore {ignPickedIds.length} selected
+                  </Button>
+                )}
+              </div>
+              <table className="w-full text-left text-sm">
+                <thead className="border-b border-line text-xs text-muted">
+                  <tr>
+                    <th className="w-8 px-2 py-1.5">
+                      <input
+                        type="checkbox"
+                        aria-label="Select every ignored document"
+                        className="accent-[var(--color-primary)]"
+                        checked={ignPickedIds.length === ignoredRows.length}
+                        ref={(el) => {
+                          if (el) el.indeterminate = ignPickedIds.length > 0 && ignPickedIds.length < ignoredRows.length;
+                        }}
+                        onChange={(e) =>
+                          setIgnPicked(Object.fromEntries(ignoredRows.map((d) => [d.doc_id, e.target.checked])))
+                        }
+                      />
+                    </th>
+                    <th className="w-16 px-2 py-1.5 font-medium">ID</th>
+                    <th className="px-2 py-1.5 font-medium">Document</th>
+                    <th className="px-2 py-1.5 font-medium">Lacks</th>
+                    <th className="px-2 py-1.5 font-medium">Ignored</th>
+                    <th className="px-2 py-1.5" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {ignoredRows.map((d) => (
+                    <tr key={d.doc_id} className={ignPicked[d.doc_id] ? "bg-surface-2" : ""}>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ignored ${d.title || `document ${d.doc_id}`}`}
+                          title="Select this row. Shift-click selects the rows in between."
+                          className="accent-[var(--color-primary)]"
+                          checked={!!ignPicked[d.doc_id]}
+                          onChange={() => {}}
+                          onClick={(e) => pickIgn(d.doc_id, !ignPicked[d.doc_id], e.shiftKey)}
+                        />
+                      </td>
+                      <td className="px-2 py-1.5 tabular-nums">{d.doc_id}</td>
+                      <td className="px-2 py-1.5">{docTitle(d.doc_id, d.title)}</td>
+                      <td className={`px-2 py-1.5 text-xs ${d.no_tags || d.no_type ? "" : "text-faint"}`}>{lacks(d)}</td>
+                      <td className="whitespace-nowrap px-2 py-1.5 text-xs text-faint">
+                        {new Date(d.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-2 py-1 text-right">
+                        <Button size="sm" variant="ghost" onClick={() => unignore([d.doc_id])}>
+                          Un-ignore
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
 

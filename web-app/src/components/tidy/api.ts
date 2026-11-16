@@ -190,6 +190,11 @@ export interface FillIgnored {
   doc_id: number;
   title: string;
   created_at: string;
+  /** What the document lacks today; both false once it has been filled since. */
+  no_tags: boolean;
+  no_type: boolean;
+  /** paperless-ngx no longer lists it. */
+  gone: boolean;
 }
 
 /** What a run would ask about now, and the documents Fill leaves alone. */

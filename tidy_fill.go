@@ -45,11 +45,22 @@ type tidyFillIgnoreItem struct {
 
 // tidyFillStatus is what a run would do now, and the ignore list.
 type tidyFillStatus struct {
-	Documents   int              `json:"documents"`
-	WithoutTags int              `json:"without_tags"`
-	WithoutType int              `json:"without_type"`
-	Calls       int              `json:"calls"`
-	Ignored     []TidyFillIgnore `json:"ignored"`
+	Documents   int               `json:"documents"`
+	WithoutTags int               `json:"without_tags"`
+	WithoutType int               `json:"without_type"`
+	Calls       int               `json:"calls"`
+	Ignored     []tidyFillIgnored `json:"ignored"`
+}
+
+// tidyFillIgnored is an ignored document with what it lacks today, so the page
+// can tell a document left without tags from one left without a type, or one
+// filled by hand since it was ignored.
+type tidyFillIgnored struct {
+	TidyFillIgnore
+	NoTags bool `json:"no_tags"`
+	NoType bool `json:"no_type"`
+	// Gone: paperless-ngx no longer lists the document (deleted or trashed).
+	Gone bool `json:"gone"`
 }
 
 type tidyFillResult struct {
@@ -140,30 +151,37 @@ func (s *tidyService) fillIgnoredIDs() (map[int]bool, error) {
 
 // fillTargets lists the documents a run would ask about now.
 func (s *tidyService) fillTargets(ctx context.Context, limit int) ([]tidyFillResult, error) {
+	targets, _, err := s.fillTargetsAndDocs(ctx, limit)
+	return targets, err
+}
+
+// fillTargetsAndDocs is fillTargets plus the documents it read, for callers
+// that need both without a second pass over the archive.
+func (s *tidyService) fillTargetsAndDocs(ctx context.Context, limit int) ([]tidyFillResult, []tidyDoc, error) {
 	docs, err := tidyFetchDocs(ctx, s.client, "")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tags, err := tidyFetchObjects(ctx, s.client, "tags")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ignored, err := s.fillIgnoredIDs()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cfg := s.configRefs()
 	queue := append(tidyTagIDsByName(tags, cfg.AutoTag), tidyTagIDsByName(tags, cfg.OCRTag)...)
-	return tidyFillTargets(docs, queue, ignored, limit), nil
+	return tidyFillTargets(docs, queue, ignored, limit), docs, nil
 }
 
 // fillStatus counts what a run would ask about and lists the ignored documents.
 func (s *tidyService) fillStatus(ctx context.Context) (*tidyFillStatus, error) {
-	targets, err := s.fillTargets(ctx, 0)
+	targets, docs, err := s.fillTargetsAndDocs(ctx, 0)
 	if err != nil {
 		return nil, err
 	}
-	st := &tidyFillStatus{Documents: len(targets), Ignored: []TidyFillIgnore{}}
+	st := &tidyFillStatus{Documents: len(targets), Ignored: []tidyFillIgnored{}}
 	for _, t := range targets {
 		if t.AskTags {
 			st.WithoutTags++
@@ -175,8 +193,22 @@ func (s *tidyService) fillStatus(ctx context.Context) (*tidyFillStatus, error) {
 		}
 	}
 	if s.db != nil {
-		if err := s.db.Order("created_at desc, doc_id desc").Find(&st.Ignored).Error; err != nil {
+		var rows []TidyFillIgnore
+		if err := s.db.Order("created_at desc, doc_id desc").Find(&rows).Error; err != nil {
 			return nil, err
+		}
+		byID := make(map[int]tidyDoc, len(docs))
+		for _, d := range docs {
+			byID[d.ID] = d
+		}
+		for _, r := range rows {
+			it := tidyFillIgnored{TidyFillIgnore: r}
+			if d, ok := byID[r.DocID]; ok {
+				it.NoTags, it.NoType = len(d.Tags) == 0, d.DocumentType == nil
+			} else {
+				it.Gone = true
+			}
+			st.Ignored = append(st.Ignored, it)
 		}
 	}
 	return st, nil

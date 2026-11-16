@@ -370,7 +370,7 @@ func TestTidyFillIgnoreList(t *testing.T) {
 
 	st, err := s.fillStatus(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, tidyFillStatus{Documents: 3, WithoutTags: 3, WithoutType: 1, Calls: 4, Ignored: []TidyFillIgnore{}}, *st)
+	assert.Equal(t, tidyFillStatus{Documents: 3, WithoutTags: 3, WithoutType: 1, Calls: 4, Ignored: []tidyFillIgnored{}}, *st)
 
 	n, err := s.ignoreFill([]tidyFillIgnoreItem{{DocID: 2, Title: " A manual "}, {DocID: 2, Title: "again"}, {DocID: 0}})
 	require.NoError(t, err)
@@ -383,6 +383,9 @@ func TestTidyFillIgnoreList(t *testing.T) {
 	assert.Equal(t, 3, st.Calls)
 	require.Len(t, st.Ignored, 1)
 	assert.Equal(t, "A manual", st.Ignored[0].Title)
+	assert.True(t, st.Ignored[0].NoTags, "document 2 has no tags")
+	assert.False(t, st.Ignored[0].NoType, "document 2 has a type")
+	assert.False(t, st.Ignored[0].Gone)
 
 	run, err := s.startFill(ctx, 0)
 	require.NoError(t, err)

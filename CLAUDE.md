@@ -254,7 +254,11 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   is clicked (`isFilled`). Checked on the demo server: apply, reopen, toggle.
   An ignored document leaves the table at once (it used to stay, faded, which read as "ignore
   did nothing"); "Show N ignored" above the table is the one place they are listed, with
-  Un-ignore, which puts a document of the current run back in the table.
+  Un-ignore, which puts a document of the current run back in the table. That list is a table
+  too: a selection column (Shift-click for a range) for "Un-ignore N selected", and a Lacks
+  column read live from paperless-ngx (`no_tags`, `no_type`, `gone` on each `/fill/status`
+  ignored entry), so a document left without a type is told apart from one without tags or one
+  filled by hand since. Checked on the demo server: Lacks values, Shift-click, un-ignore.
   The table's first column is the one selection (Shift-click takes the rows in between, the
   heading's box every row shown). It serves both buttons: "Apply to N selected" fills the
   selected rows that have an answer, "Ignore N selected" ignores them. There are no boxes in
