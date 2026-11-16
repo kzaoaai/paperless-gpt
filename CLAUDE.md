@@ -301,8 +301,9 @@ paperless-ngx, no container and no model (its header has the command; skipped un
 
 ### Open items
 
-- Production runs `62659dd` (deployed 2026-11-16: Fill's table selects rows for a bulk ignore;
-  rollback image `:341b7f2adf6dd6879e0baa05944cf1f5b06ffb64`; earlier Tidy builds `c846093`, `db9990f`,
+- Production runs `c34e365` (deployed 2026-11-16: one selection box per row in Fill drives Apply
+  and Ignore; rollback image `:62659dd02dfb36b233a9f22c70881749cc914a4a`; earlier Tidy builds
+  `341b7f2`, `c846093`, `db9990f`,
   `262c118`, `7ee17ad`, `20b4767`, `6c44ced`, `03162b2`, `59b98de`, `1d87a5a`), with
   `TIDY_WRITES: "true"` in the compose since 2026-11-14. Splits have run in production (Gemini's
   answers were sensible when the bucket was left out); three fill runs have, and the usable answers of the second and third were applied. A database backup taken right before writes were enabled is on the CT; the homelable
