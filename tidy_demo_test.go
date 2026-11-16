@@ -60,7 +60,17 @@ func TestTidyDemoServer(t *testing.T) {
 		f.addDoc(d)
 		f.titles[id] = title
 	}
+	// Titles as an old import left them, for the title re-check.
+	for i, title := range []string{"Scan_20230412", "41ead9a1-381b-4cbb-95e7-2f080ff63b4f", "Invoice_4471.pdf", "Paychecks", "ID Card Front"} {
+		id := 113 + i
+		f.addDoc(tidyDoc{ID: id, Added: "2023-04-0" + strconv.Itoa(1+i) + "T00:00:00Z", Correspondent: ip(31), DocumentType: ip(21), Tags: []int{11},
+			OriginalFileName: title + ".pdf"})
+		f.titles[id] = title
+	}
 	s := newTestTidy(t, f)
+	s.titleSuggest = func(ctx context.Context, id int) (string, string, error) {
+		return f.titles[id], "Example Bank - Statement - " + strconv.Itoa(4000+id) + " - 2023-04", nil
+	}
 	// Fixed answers: nothing for a manual, as the tag prompt allows.
 	s.fillSuggest = func(ctx context.Context, id int, wantTags, wantType bool) (string, []string, string, error) {
 		title := f.titles[id]

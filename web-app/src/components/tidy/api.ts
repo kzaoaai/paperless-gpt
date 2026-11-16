@@ -206,6 +206,48 @@ export interface FillStatus {
   ignored: FillIgnored[];
 }
 
+export interface TitleRun {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  status: "running" | "done" | "stopped";
+  total: number;
+  done: number;
+}
+
+export interface TitleItem {
+  doc_id: number;
+  /** The title when the run asked. */
+  title: string;
+  /** The title now. */
+  current: string;
+  suggested: string;
+  /** The title changed since the run: applied, or edited by hand. */
+  changed: boolean;
+  gone: boolean;
+  ignored: boolean;
+  error?: string;
+}
+
+export interface TitleView {
+  run: TitleRun;
+  items: TitleItem[];
+}
+
+export interface TitleIgnored {
+  doc_id: number;
+  title: string;
+  created_at: string;
+  current: string;
+  gone: boolean;
+}
+
+export interface TitleStatus {
+  candidates: number;
+  documents: number;
+  ignored: TitleIgnored[];
+}
+
 export interface FillView {
   run: FillRun;
   items: FillItem[];
@@ -314,6 +356,17 @@ export const tidyApi = {
   fillStop: () => call<{ stopping: boolean }>("POST", "fill/stop"),
   fillApply: (run_id: number, items: FillApplyItem[]) => call<Action>("POST", "fill/apply", { run_id, items }),
   fillStatus: () => call<FillStatus>("GET", "fill/status"),
+  titlesStatus: () => call<TitleStatus>("GET", "titles/status"),
+  titlesStart: (limit: number, doc_ids: number[] = []) =>
+    call<TitleRun>("POST", "titles/start", { limit, doc_ids }),
+  titlesStop: () => call<{ stopping: boolean }>("POST", "titles/stop"),
+  titlesRuns: () => call<TitleRun[]>("GET", "titles/runs"),
+  titlesView: (id: number) => call<TitleView>("GET", `titles/runs/${id}`),
+  titlesIgnore: (items: { doc_id: number; title: string }[]) =>
+    call<{ ignored: number }>("POST", "titles/ignore", { items }),
+  titlesUnignore: (doc_ids: number[]) => call<{ unignored: number }>("POST", "titles/unignore", { doc_ids }),
+  titlesApply: (run_id: number, items: { doc_id: number; title: string }[]) =>
+    call<Action>("POST", "titles/apply", { run_id, items }),
   fillIgnore: (items: { doc_id: number; title: string }[]) =>
     call<{ ignored: number }>("POST", "fill/ignore", { items }),
   fillUnignore: (doc_ids: number[]) => call<{ unignored: number }>("POST", "fill/unignore", { doc_ids }),

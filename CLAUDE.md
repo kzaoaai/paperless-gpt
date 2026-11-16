@@ -163,7 +163,8 @@ Inventory and cleanup of paperless-ngx tags, correspondents, document types, sto
 custom fields. Go: `tidy_paperless.go` (API calls), `tidy_findings.go` (inventory, references,
 findings), `tidy_actions.go` (actions, log, undo, aliases), `tidy_routes.go` (`/api/tidy/...`),
 `tidy_llm.go` (LLM duplicate groups), `tidy_hygiene.go` (archive health, custom-field values),
-`tidy_split.go` (splitting a catch-all correspondent), `tidy_fill.go` (filling missing tags and types). Tests: `tidy_test.go` and `tidy_v11_test.go`,
+`tidy_split.go` (splitting a catch-all correspondent), `tidy_fill.go` (filling missing tags and types),
+`tidy_titles.go` (re-checking titles). Tests: `tidy_test.go`, `tidy_v11_test.go` and `tidy_titles_test.go`,
 against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rules.
 `tidy_demo_test.go` serves the real routes and the built web app against that fake, with fixed
 stub answers in place of the LLM, on one local port: the way to try the page with no
@@ -274,6 +275,19 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   title: their body must be `flex min-h-0 flex-1 flex-col`. With `h-full` the body was as tall as
   the whole panel, so a list longer than the dialog pushed the footer and its Apply button out of
   sight (found in production 2026-11-15). When checking a dialog, look at it with a long list.
+- Re-check titles (`tidy_titles.go`, `TitlesDialog.tsx`, "Re-check titles…" under Archive health):
+  candidates are titles that look raw (`tidyTitleLooksRaw`: equal to the upload file name without
+  its extension, a UUID, a file extension, underscores or one word without spaces, digits only, a
+  generic label like "PDF document"), not on the title ignore list (`tidy_title_ignores`, separate
+  from Fill's) and not queued for paperless-gpt; explicit ids skip the rule. A background run
+  (`tidy_title_runs`, the one-at-a-time lock shared with splits and fills) asks only the title prompt
+  (`generateSingleDocumentSuggestion` with `GenerateTitles`), one call per document; answers are
+  cut to 128 characters. The dialog shows current and suggested titles side by side, the suggestion
+  editable, with Fill's selection column, filter, Ignore and "done or unchanged" toggle. Applying is
+  one `titles` action, a per-document PATCH of `title`; a document whose title changed since the run
+  is skipped, so a hand edit is never overwritten. Undo puts the old title back where the applied one
+  is still there. The file name match catches names a person chose too, so nothing is applied
+  without being selected. Checked on the demo server: run, ignore, edit, Shift-click, apply, undo.
 - bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
   Document Updated workflows run on them; the merge preview lists the enabled ones.
 - Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes

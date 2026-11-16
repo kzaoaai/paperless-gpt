@@ -232,7 +232,11 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 		var res []*tidyDoc
 		if start < len(ids) {
 			for _, id := range ids[start:end] {
-				res = append(res, f.docs[id])
+				d := *f.docs[id]
+				if d.Title == "" {
+					d.Title = f.titles[id]
+				}
+				res = append(res, &d)
 			}
 		}
 		var next any
@@ -325,6 +329,9 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 3 && parts[1] == "documents" && r.Method == "PATCH":
 		id, _ := strconv.Atoi(parts[2])
 		d := f.docs[id]
+		if title, ok := body["title"].(string); ok {
+			f.titles[id], d.Title = title, title
+		}
 		if tags, ok := body["tags"]; ok {
 			var full []int
 			for _, t := range toInts(tags) {
@@ -414,7 +421,7 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 func newTestTidy(t *testing.T, f *fakePaperless) *tidyService {
 	db, err := InitializeTestDB()
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}))
+	require.NoError(t, db.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}, &TidyTitleRun{}, &TidyTitleIgnore{}))
 	return &tidyService{client: f.client(), db: db, writes: true, viewer: "mcp-reader",
 		configRefs: func() tidyConfigRefs {
 			return tidyConfigRefs{TagNames: map[string]string{"paperless-gpt": "AUTO_TAG"}, CustomFieldIDs: map[int]string{}}

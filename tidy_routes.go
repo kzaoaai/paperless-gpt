@@ -25,7 +25,7 @@ func registerTidy(router *gin.Engine, api *gin.RouterGroup, app *App) {
 		return
 	}
 	if app.Database != nil {
-		if err := app.Database.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}); err != nil {
+		if err := app.Database.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}, &TidyTitleRun{}, &TidyTitleIgnore{}); err != nil {
 			log.Errorf("Tidy page disabled: migrating its tables failed: %v", err)
 			return
 		}
@@ -79,11 +79,29 @@ func registerTidy(router *gin.Engine, api *gin.RouterGroup, app *App) {
 			}
 			return doc.Title, sug.SuggestedTags, sug.SuggestedDocumentType, nil
 		}
+		// Only the title generator, so nothing else about the document is asked.
+		s.titleSuggest = func(ctx context.Context, docID int) (string, string, error) {
+			doc, err := app.Client.GetDocument(ctx, docID)
+			if err != nil {
+				return "", "", err
+			}
+			req := GenerateSuggestionsRequest{Documents: []Document{doc}, GenerateTitles: true}
+			genCtx, err := app.prepareSuggestionGenerationContext(ctx, req)
+			if err != nil {
+				return doc.Title, "", err
+			}
+			sug, err := app.generateSingleDocumentSuggestion(ctx, req, doc, genCtx, log.WithField("tidy", "titles"))
+			if err != nil {
+				return doc.Title, "", err
+			}
+			return doc.Title, sug.SuggestedTitle, nil
+		}
 	}
 	// A run left "running" by a restart can never finish.
 	if app.Database != nil {
 		app.Database.Model(&TidySplitRun{}).Where("status = ?", "running").Update("status", "stopped")
 		app.Database.Model(&TidyFillRun{}).Where("status = ?", "running").Update("status", "stopped")
+		app.Database.Model(&TidyTitleRun{}).Where("status = ?", "running").Update("status", "stopped")
 	}
 	s.routes(api.Group("/tidy"))
 
@@ -330,6 +348,76 @@ func (s *tidyService) routes(g *gin.RouterGroup) {
 			return
 		}
 		a, err := s.applyFill(c.Request.Context(), req.RunID, req.Items)
+		tidyRespondAction(c, a, err)
+	})
+	g.GET("/titles/status", func(c *gin.Context) {
+		st, err := s.titleStatus(c.Request.Context())
+		tidyRespond(c, st, err)
+	})
+	g.POST("/titles/start", func(c *gin.Context) {
+		var req struct {
+			Limit  int   `json:"limit"`
+			DocIDs []int `json:"doc_ids"`
+		}
+		_ = c.ShouldBindJSON(&req)
+		run, err := s.startTitles(c.Request.Context(), req.DocIDs, req.Limit)
+		tidyRespond(c, run, err)
+	})
+	g.POST("/titles/stop", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"stopping": s.stopSplit()})
+	})
+	g.GET("/titles/runs", func(c *gin.Context) {
+		runs := []TidyTitleRun{}
+		if s.db != nil {
+			if err := s.db.Omit("results").Order("id desc").Limit(20).Find(&runs).Error; err != nil {
+				tidyRespond(c, nil, err)
+				return
+			}
+		}
+		c.JSON(http.StatusOK, runs)
+	})
+	g.GET("/titles/runs/:id", func(c *gin.Context) {
+		id, err := strconv.Atoi(c.Param("id"))
+		if err != nil || id <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad run id"})
+			return
+		}
+		view, err := s.titleView(c.Request.Context(), uint(id))
+		tidyRespond(c, view, err)
+	})
+	// Like Fill's, the title ignore list is paperless-gpt's own and works read-only.
+	g.POST("/titles/ignore", func(c *gin.Context) {
+		var req struct {
+			Items []tidyFillIgnoreItem `json:"items"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		n, err := s.ignoreTitles(req.Items)
+		tidyRespond(c, gin.H{"ignored": n}, err)
+	})
+	g.POST("/titles/unignore", func(c *gin.Context) {
+		var req struct {
+			DocIDs []int `json:"doc_ids"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		n, err := s.unignoreTitles(req.DocIDs)
+		tidyRespond(c, gin.H{"unignored": n}, err)
+	})
+	g.POST("/titles/apply", func(c *gin.Context) {
+		var req struct {
+			RunID uint                 `json:"run_id"`
+			Items []tidyTitleApplyItem `json:"items"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		a, err := s.applyTitles(c.Request.Context(), req.RunID, req.Items)
 		tidyRespondAction(c, a, err)
 	})
 	g.POST("/split/apply", func(c *gin.Context) {

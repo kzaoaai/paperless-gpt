@@ -13,6 +13,7 @@ import ActionLog from "./components/tidy/ActionLog";
 import MergeDialog from "./components/tidy/MergeDialog";
 import SplitDialog from "./components/tidy/SplitDialog";
 import FillDialog from "./components/tidy/FillDialog";
+import TitlesDialog from "./components/tidy/TitlesDialog";
 import {
   Action,
   Finding,
@@ -71,6 +72,7 @@ const Tidy: React.FC = () => {
   const [mergeIds, setMergeIds] = useState<number[] | null>(null);
   const [splitRow, setSplitRow] = useState<Row | null>(null);
   const [fillOpen, setFillOpen] = useState(false);
+  const [titlesOpen, setTitlesOpen] = useState(false);
   const [renameRow, setRenameRow] = useState<Row | null>(null);
   const [renameTo, setRenameTo] = useState("");
   const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; run: () => Promise<unknown> } | null>(null);
@@ -363,11 +365,16 @@ const Tidy: React.FC = () => {
             <h2 className="text-sm font-semibold">
               Archive health <span className="font-normal text-muted">({inv.document_count} documents)</span>
             </h2>
-            {missing.tags + missing.types > 0 && (
-              <Button size="sm" variant="ghost" onClick={() => setFillOpen(true)}>
-                <SparklesIcon className="h-4 w-4" aria-hidden="true" /> Fill missing tags and types…
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setTitlesOpen(true)}>
+                <SparklesIcon className="h-4 w-4" aria-hidden="true" /> Re-check titles…
               </Button>
-            )}
+              {missing.tags + missing.types > 0 && (
+                <Button size="sm" variant="ghost" onClick={() => setFillOpen(true)}>
+                  <SparklesIcon className="h-4 w-4" aria-hidden="true" /> Fill missing tags and types…
+                </Button>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {(inv.hygiene ?? []).map((h) => {
@@ -754,6 +761,17 @@ const Tidy: React.FC = () => {
         </>
       )}
 
+      {inv && titlesOpen && (
+        <TitlesDialog
+          writes={writes}
+          paperlessUrl={paperlessUrl}
+          onClose={() => setTitlesOpen(false)}
+          onDone={(m) => {
+            setTitlesOpen(false);
+            changed(m);
+          }}
+        />
+      )}
       {inv && fillOpen && (
         <FillDialog
           missingTags={missing.tags}

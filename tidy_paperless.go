@@ -79,14 +79,16 @@ type tidyObject struct {
 
 // tidyDoc is the slice of a document the Tidy page reads.
 type tidyDoc struct {
-	ID            int              `json:"id"`
-	Created       string           `json:"created"`
-	Added         string           `json:"added"`
-	Tags          []int            `json:"tags"`
-	Correspondent *int             `json:"correspondent"`
-	DocumentType  *int             `json:"document_type"`
-	StoragePath   *int             `json:"storage_path"`
-	CustomFields  []tidyFieldValue `json:"custom_fields"`
+	ID               int              `json:"id"`
+	Title            string           `json:"title"`
+	OriginalFileName string           `json:"original_file_name"`
+	Created          string           `json:"created"`
+	Added            string           `json:"added"`
+	Tags             []int            `json:"tags"`
+	Correspondent    *int             `json:"correspondent"`
+	DocumentType     *int             `json:"document_type"`
+	StoragePath      *int             `json:"storage_path"`
+	CustomFields     []tidyFieldValue `json:"custom_fields"`
 }
 
 // tidyFieldValue is one custom field on a document; Value is kept raw since
@@ -248,7 +250,7 @@ func tidyFetchObject(ctx context.Context, c tidyHTTP, kind string, id int) (*tid
 	return &objs[0], nil
 }
 
-const tidyDocFields = "id,created,added,tags,correspondent,document_type,storage_path,custom_fields"
+const tidyDocFields = "id,title,original_file_name,created,added,tags,correspondent,document_type,storage_path,custom_fields"
 
 // tidyFetchDocs lists documents (root documents only: paperless-ngx 3.0 leaves
 // file-version rows out of the list) matching the given filter query, e.g.
