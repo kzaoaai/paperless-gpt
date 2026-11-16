@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Button from "../ui/Button";
 import Modal from "../ui/Modal";
 import { FillApplyItem, FillItem, FillRun, FillStatus, FillView, tidyApi } from "./api";
@@ -91,6 +91,9 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
   const [showIgnored, setShowIgnored] = useState(false);
   const [filter, setFilter] = useState("");
   const [showFilled, setShowFilled] = useState(false);
+  // Rows picked with the first column's box, for the bulk Ignore; not the same as ticking an answer.
+  const [selected, setSelected] = useState<Record<number, boolean>>({});
+  const lastPicked = useRef<number | null>(null);
   // A run lists the newest documents first, which is the highest id first.
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "id", desc: true });
 
@@ -134,6 +137,7 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
       setTickType({});
       setDropped({});
       setFilter("");
+      setSelected({});
       setRun(await tidyApi.fillStart(limit));
     } catch (e) {
       fail(e);
@@ -221,6 +225,25 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
       fail(e);
     }
   };
+  // Selects one row, or with Shift held every shown row from the last one picked to this one.
+  const pick = (docId: number, on: boolean, range: boolean) => {
+    const ids = shown.map((i) => i.doc_id);
+    const from = lastPicked.current === null ? -1 : ids.indexOf(lastPicked.current);
+    const to = ids.indexOf(docId);
+    const span = range && from >= 0 ? ids.slice(Math.min(from, to), Math.max(from, to) + 1) : [docId];
+    setSelected({ ...selected, ...Object.fromEntries(span.map((id) => [id, on])) });
+    lastPicked.current = docId;
+  };
+  const pickShown = (on: boolean) =>
+    setSelected({ ...selected, ...Object.fromEntries(shown.map((i) => [i.doc_id, on])) });
+  // Selected rows that are still in the table: ignoring or filling one takes it out.
+  const picked = open.filter((i) => selected[i.doc_id]);
+  const pickedShown = shown.filter((i) => selected[i.doc_id]).length;
+  const ignorePicked = async () => {
+    await ignore(picked.map((i) => ({ doc_id: i.doc_id, title: i.title })));
+    setSelected({});
+    lastPicked.current = null;
+  };
   const unignore = async (ids: number[]) => {
     setError(null);
     try {
@@ -270,7 +293,8 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
             and nothing else about the document is asked or changed. Documents waiting in paperless-gpt's queue are
             skipped. Nothing changes until you tick answers and apply them; the change is logged and can be undone.
             Click a suggested tag to leave it out. An ignored document leaves the list and is not asked about again;
-            "Show ignored" lists them, with Un-ignore.
+            "Show ignored" lists them, with Un-ignore. The first column selects rows for one Ignore; Shift-click
+            selects a range.
           </p>
           {loading && <p className="text-muted">Loading…</p>}
 
@@ -385,6 +409,20 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                 <table className="w-full text-left text-sm">
                   <thead className="border-b border-line bg-surface-2 text-xs text-muted">
                     <tr>
+                      <th className="w-8 px-2 py-2">
+                        <input
+                          type="checkbox"
+                          aria-label="Select every row shown"
+                          title="Select every row shown, for Ignore"
+                          className="accent-[var(--color-primary)]"
+                          disabled={shown.length === 0}
+                          checked={shown.length > 0 && pickedShown === shown.length}
+                          ref={(el) => {
+                            if (el) el.indeterminate = pickedShown > 0 && pickedShown < shown.length;
+                          }}
+                          onChange={(e) => pickShown(e.target.checked)}
+                        />
+                      </th>
                       {header("id", "ID", "w-16")}
                       {header("title", "Document")}
                       {header("tags", "Tags")}
@@ -395,7 +433,7 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                   <tbody className="divide-y divide-line">
                     {shown.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="px-2 py-3 text-muted">
+                        <td colSpan={6} className="px-2 py-3 text-muted">
                           {filtering
                             ? "No document matches the filter."
                             : "Nothing is left of this run: its documents have been filled or ignored."}
@@ -405,7 +443,18 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
                     {shown.map((i) => {
                       const cell = "px-2 py-1.5";
                       return (
-                        <tr key={i.doc_id} className="align-top">
+                        <tr key={i.doc_id} className={`align-top ${selected[i.doc_id] ? "bg-surface-2" : ""}`}>
+                          <td className="px-2 py-1.5">
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${i.title || `document ${i.doc_id}`}`}
+                              title="Select this row. Shift-click selects the rows in between."
+                              className="mt-1 accent-[var(--color-primary)]"
+                              checked={!!selected[i.doc_id]}
+                              onChange={() => {}}
+                              onClick={(e) => pick(i.doc_id, !selected[i.doc_id], e.shiftKey)}
+                            />
+                          </td>
                           <td className={`${cell} whitespace-nowrap tabular-nums`}>
                             {link(i.doc_id) ? (
                               <a className="hover:underline" href={link(i.doc_id)} target="_blank" rel="noreferrer">
@@ -510,6 +559,11 @@ const FillDialog: React.FC<FillDialogProps> = ({ missingTags, missingTypes, writ
             <span className="mr-auto text-xs text-warn">
               {hiddenChosen} of the ticked documents {hiddenChosen === 1 ? "is" : "are"} hidden by the filter.
             </span>
+          )}
+          {picked.length > 0 && (
+            <Button onClick={ignorePicked} disabled={busy}>
+              Ignore {picked.length} selected
+            </Button>
           )}
           <Button onClick={onClose} disabled={busy}>
             Close
