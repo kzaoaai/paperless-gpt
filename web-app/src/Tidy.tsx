@@ -23,6 +23,7 @@ import {
   MATCH_NAMES,
   Row,
   TidyError,
+  attributesLink,
   docsLink,
   tidyApi,
 } from "./components/tidy/api";
@@ -596,7 +597,19 @@ const Tidy: React.FC = () => {
                   {shown.map((r) => (
                     <tr key={r.id} className="align-top">
                       <td className="px-2 py-1.5">
-                        {r.name}
+                        {paperlessUrl && r.doc_count > 0 ? (
+                          <a
+                            className="text-primary hover:underline"
+                            href={docsLink(paperlessUrl, kind, r.id)}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={`Open its ${r.doc_count} document${r.doc_count === 1 ? "" : "s"} in paperless-ngx`}
+                          >
+                            {r.name}
+                          </a>
+                        ) : (
+                          r.name
+                        )}
                         <span className="ml-1 text-xs text-faint">#{r.id}</span>
                         {r.is_inbox_tag && <span className="ml-1 text-xs text-primary">inbox</span>}
                       </td>
@@ -613,8 +626,23 @@ const Tidy: React.FC = () => {
                       <td className="px-2 py-1.5 text-muted">{r.last_added ? r.last_added.slice(0, 10) : "—"}</td>
                       {hasMatching && (
                         <td className="px-2 py-1.5">
-                          {MATCH_NAMES[r.matching_algorithm ?? -1] ?? "—"}
-                          {r.match && <span className="block text-xs text-muted">“{r.match}”</span>}
+                          {paperlessUrl ? (
+                            <a
+                              className="hover:underline"
+                              href={attributesLink(paperlessUrl, kind)}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={`Open paperless-ngx's ${kindInfo.label} page to edit “${r.name}”`}
+                            >
+                              {MATCH_NAMES[r.matching_algorithm ?? -1] ?? "—"}
+                              {r.match && <span className="block text-xs text-muted">“{r.match}”</span>}
+                            </a>
+                          ) : (
+                            <>
+                              {MATCH_NAMES[r.matching_algorithm ?? -1] ?? "—"}
+                              {r.match && <span className="block text-xs text-muted">“{r.match}”</span>}
+                            </>
+                          )}
                         </td>
                       )}
                       {kind === "custom_fields" && <td className="px-2 py-1.5 text-muted">{r.data_type}</td>}

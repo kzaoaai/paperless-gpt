@@ -196,6 +196,12 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   `UpdateDocuments` resolves LLM suggestions with, so the LLM saying "ACCU" lands on the merge target
   instead of recreating it. A real object with that name always wins. Tag aliases do not exist: tag
   suggestions are filtered against existing tags before `UpdateDocuments`.
+- Links into paperless-ngx (from `/api/paperless-url`): an object's name and its Docs count open
+  the document list filtered to it (`docsLink`: `correspondent__id__in`, `tags__id__all`,
+  `document_type__id__in`, `storage_path__id__in`, `custom_fields__id__all`, all filter names
+  paperless-ngx 3.0's frontend reads from the URL); the Matching cell opens that kind's
+  Attributes page (`attributesLink`, `/attributes/<section>`). paperless-ngx 3.0 has no URL for
+  one object's edit dialog, so that page is as close as a link gets.
 - Archive health (`tidyBuildHygiene`), from the same document pass: no correspondent, no type, no
   tags, still in an inbox tag after 14 days, carrying `AUTO_TAG` or `AUTO_OCR_TAG` for more than a
   day, carrying `FAIL_TAG`. Each links to the paperless-ngx list (`correspondent__isnull=1`,

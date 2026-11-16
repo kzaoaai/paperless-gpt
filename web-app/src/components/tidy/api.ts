@@ -334,3 +334,18 @@ export function docsLink(base: string, kind: Kind, id: number): string {
   };
   return `${base}/documents?${filter[kind]}`;
 }
+
+/**
+ * paperless-ngx's own page for a kind of object. paperless-ngx 3.0 has no URL for one
+ * object's edit dialog, only for its list (Attributes, one section per kind).
+ */
+export function attributesLink(base: string, kind: Kind): string {
+  const section: Record<Kind, string> = {
+    correspondents: "correspondents",
+    tags: "tags",
+    document_types: "documenttypes",
+    storage_paths: "storagepaths",
+    custom_fields: "customfields",
+  };
+  return `${base}/attributes/${section[kind]}`;
+}
