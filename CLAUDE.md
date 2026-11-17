@@ -365,6 +365,14 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   with no record says so: it was marked before this existed, or by hand.
   The custom-field prompt already tells the model to stay under 128 characters and the model
   still sent 132 for a text field once (2026-11-17), so the prompt does not prevent this.
+  So `text_limit.go` (`ab91f69`) cuts a text custom field longer than 128 characters at the
+  last whole word that fits before it is sent (`fitCustomFieldText`, one line in
+  `UpdateDocuments` after `normalizeCustomFieldValue`): the field is filled and the document
+  is not marked. The full text goes to the log as a warning, the only place it is kept. Only
+  the `string` data type: paperless-ngx sets no such limit on the others. A record with no
+  value (one written by hand from the log) gets advice that does not count the characters of
+  a text it does not have. The cut has run in the Go tests only: no live document has been
+  over the limit since the deploy.
   Checked on the demo server (all three actions, the count, the log) and in the Go tests,
   which also cover the record written by a real `UpdateDocuments` call. In production (deployed
   2026-11-17) the view has been read: it lists the one marked document, without a record since
@@ -407,9 +415,9 @@ paperless-ngx, no container and no model (its header has the command; skipped un
 
 ### Open items
 
-- Production runs `bf55da6` (deployed 2026-11-17: the failure record, the failed-documents dialog
-  and setting created dates; rollback image `:ba87321d61a1d7b8b3c100e7aef0acdf90c6c8d4`; earlier
-  builds `ba87321` (the date checks' estimate for a gone source), `e2933e9` (the date
+- Production runs `ab91f69` (deployed 2026-11-17 23:20 UTC: an over-long text custom field is cut
+  to fit; rollback image `:bf55da65e6cd0b83ae54203a15c8142443d2a464`; earlier
+  builds `bf55da6` (the failure record, the failed-documents dialog and setting created dates), `ba87321` (the date checks' estimate for a gone source), `e2933e9` (the date
   checks), `cf4ebfa` (new correspondents and
   tags get the viewer's view grant), `f15b944` (Fill and Split show current titles), `7c49471`, `d352785`, `b12aebd`,
   `c34e365`, `62659dd`, `341b7f2`, `c846093`, `db9990f`,
