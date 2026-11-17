@@ -81,6 +81,10 @@ type tidyActionDetail struct {
 	// Titles: each retitled document's title before and after.
 	Titles   []tidyTitleChange `json:"titles,omitempty"`
 	TitleRun uint              `json:"title_run,omitempty"`
+	// Failed documents: each one's tags, and any value a fix replaced, before.
+	Failed []tidyFailedUndo `json:"failed,omitempty"`
+	// Created dates: each document's created date before and after.
+	Dates []tidyTitleChange `json:"dates,omitempty"`
 }
 
 // tidyRefusal is an action Tidy will not take; the page shows why.
@@ -841,6 +845,10 @@ func (s *tidyService) undo(ctx context.Context, id uint, force bool) (*TidyActio
 		note, err = s.undoFill(ctx, &d, force)
 	case "titles":
 		note, err = s.undoTitles(ctx, &d, force)
+	case "failed_fix", "failed_clear", "failed_retry":
+		note, err = s.undoFailed(ctx, &a, &d, force)
+	case "created_dates":
+		note, err = s.undoCreatedDates(ctx, &d, force)
 	default:
 		err = tidyRefuse("cannot undo %q", a.Action)
 	}

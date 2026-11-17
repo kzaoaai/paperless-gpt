@@ -78,7 +78,26 @@ func TestTidyDemoServer(t *testing.T) {
 		Correspondent: ip(31), DocumentType: ip(21), Tags: []int{11}})
 	f.addDoc(tidyDoc{ID: 142, Title: "Registration renewal notice", Created: "2024-07-08", Added: "2024-04-18T10:00:00+03:00",
 		Correspondent: ip(31), DocumentType: ip(21), Tags: []int{11}})
+	// Failed documents: one with a value paperless-ngx refused, one paperless-gpt
+	// gave up on, and one marked with no record of why.
+	f.addObject("tags", 15, "paperless-gpt-auto", map[string]any{"permissions": perm(3)})
+	f.addObject("tags", 16, "paperless-gpt-failed", map[string]any{"permissions": perm(3)})
+	f.addObject("tags", 17, "paperless-gpt-ocr-auto", map[string]any{"permissions": perm(3)})
+	f.addObject("custom_fields", 40, "Details", map[string]any{"data_type": "string"})
+	for id, title := range map[int]string{150: "Certificate of insurance 2026-2027", 151: "Scan_0042", 152: "Parking permit"} {
+		f.addDoc(tidyDoc{ID: id, Title: title, Created: "2026-11-04", Added: "2026-11-17T19:52:28Z", Correspondent: ip(31), DocumentType: ip(21), Tags: []int{11, 16}})
+	}
 	s := newTestTidy(t, f)
+	s.configRefs = func() tidyConfigRefs {
+		return tidyConfigRefs{TagNames: map[string]string{"paperless-gpt-auto": "AUTO_TAG", "paperless-gpt-failed": "FAIL_TAG"}, CustomFieldIDs: map[int]string{},
+			AutoTag: "paperless-gpt-auto", OCRTag: "paperless-gpt-ocr-auto", FailTag: "paperless-gpt-failed"}
+	}
+	saveProcessingFailures(s.db, []ProcessingFailure{
+		{DocumentID: 150, Kind: failureRejectedField, Field: "custom_fields", FieldID: 40,
+			Value:  "Master policy for the homeowners association: general liability, property and directors and officers cover, 2026-11-04 to 2027-11-04",
+			Reason: "Ensure this value has at most 128 characters (it has 132)."},
+		{DocumentID: 151, Kind: failureGaveUp, Stage: "paperless-gpt-ocr-auto", Reason: "OCR failed 3 times"},
+	})
 	s.titleSuggest = func(ctx context.Context, id int) (string, string, error) {
 		return f.titles[id], "Example Bank - Statement - " + strconv.Itoa(4000+id) + " - 2023-04", nil
 	}

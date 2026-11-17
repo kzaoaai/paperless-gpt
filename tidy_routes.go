@@ -25,7 +25,7 @@ func registerTidy(router *gin.Engine, api *gin.RouterGroup, app *App) {
 		return
 	}
 	if app.Database != nil {
-		if err := app.Database.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}, &TidyTitleRun{}, &TidyTitleIgnore{}, &TidyDateIgnore{}, &TidyDateSource{}); err != nil {
+		if err := app.Database.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}, &TidyTitleRun{}, &TidyTitleIgnore{}, &TidyDateIgnore{}, &TidyDateSource{}, &ProcessingFailure{}); err != nil {
 			log.Errorf("Tidy page disabled: migrating its tables failed: %v", err)
 			return
 		}
@@ -432,6 +432,47 @@ func (s *tidyService) routes(g *gin.RouterGroup) {
 		n, err := s.unignoreDates(req.Items)
 		tidyRespond(c, gin.H{"unignored": n}, err)
 	})
+	g.POST("/dates/created", func(c *gin.Context) {
+		var req struct {
+			Items []tidyDateSetItem `json:"items"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		a, err := s.setCreatedDates(c.Request.Context(), req.Items)
+		tidyRespondAction(c, a, err)
+	})
+	// Documents paperless-gpt marked failed: why, and the ways out.
+	g.GET("/failed", func(c *gin.Context) {
+		view, err := s.failedView(c.Request.Context())
+		tidyRespond(c, view, err)
+	})
+	g.POST("/failed/fix", func(c *gin.Context) {
+		var req struct {
+			DocID  int               `json:"doc_id"`
+			Values []tidyFailedValue `json:"values"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		a, err := s.fixFailed(c.Request.Context(), req.DocID, req.Values)
+		tidyRespondAction(c, a, err)
+	})
+	for path, retry := range map[string]bool{"/failed/clear": false, "/failed/retry": true} {
+		g.POST(path, func(c *gin.Context) {
+			var req struct {
+				DocIDs []int `json:"doc_ids"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			a, err := s.clearFailed(c.Request.Context(), req.DocIDs, retry)
+			tidyRespondAction(c, a, err)
+		})
+	}
 	g.POST("/titles/apply", func(c *gin.Context) {
 		var req struct {
 			RunID uint                 `json:"run_id"`

@@ -14,6 +14,7 @@ import MergeDialog from "./components/tidy/MergeDialog";
 import SplitDialog from "./components/tidy/SplitDialog";
 import FillDialog from "./components/tidy/FillDialog";
 import DatesDialog from "./components/tidy/DatesDialog";
+import FailedDialog from "./components/tidy/FailedDialog";
 import TitlesDialog from "./components/tidy/TitlesDialog";
 import {
   Action,
@@ -75,6 +76,7 @@ const Tidy: React.FC = () => {
   const [fillOpen, setFillOpen] = useState(false);
   const [titlesOpen, setTitlesOpen] = useState(false);
   const [datesOpen, setDatesOpen] = useState(false);
+  const [failedOpen, setFailedOpen] = useState(false);
   const [renameRow, setRenameRow] = useState<Row | null>(null);
   const [renameTo, setRenameTo] = useState("");
   const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; run: () => Promise<unknown> } | null>(null);
@@ -396,6 +398,19 @@ const Tidy: React.FC = () => {
                     key={h.key}
                     type="button"
                     onClick={() => setDatesOpen(true)}
+                    className="rounded-md border border-line px-3 py-2 text-left hover:bg-surface-2"
+                  >
+                    {body}
+                  </button>
+                );
+              }
+              // A failed document needs its reason and a way out, which paperless-ngx's list does not have.
+              if (h.key === "failed" && h.count > 0) {
+                return (
+                  <button
+                    key={h.key}
+                    type="button"
+                    onClick={() => setFailedOpen(true)}
                     className="rounded-md border border-line px-3 py-2 text-left hover:bg-surface-2"
                   >
                     {body}
@@ -781,6 +796,15 @@ const Tidy: React.FC = () => {
           paperlessUrl={paperlessUrl}
           onClose={(dirty) => {
             setDatesOpen(false);
+            if (dirty) load(false);
+          }}
+        />
+      )}
+      {inv && failedOpen && (
+        <FailedDialog
+          paperlessUrl={paperlessUrl}
+          onClose={(dirty) => {
+            setFailedOpen(false);
             if (dirty) load(false);
           }}
         />

@@ -35,8 +35,9 @@ const estimated = (i: DateItem) => i.source_state === "estimated";
 /**
  * Document dates: documents paperless-ngx made by splitting or merging that
  * still carry the day of that change as their added date, and documents whose
- * own date is later than the day they arrived. Read-only: the added date can
- * only be set in the paperless-ngx shell, so that list comes with the script.
+ * own date is later than the day they arrived. The added date can only be set
+ * in the paperless-ngx shell, so that list comes with the script; a created
+ * date can be set from here.
  */
 const DatesDialog: React.FC<DatesDialogProps> = ({ paperlessUrl, onClose }) => {
   const [checks, setChecks] = useState<DateChecks | null>(null);
@@ -44,6 +45,10 @@ const DatesDialog: React.FC<DatesDialogProps> = ({ paperlessUrl, onClose }) => {
   const [error, setError] = useState<string | null>(null);
   const [showIgnored, setShowIgnored] = useState(false);
   const [copied, setCopied] = useState("");
+  // Created dates to set: the date typed for each document, and the rows picked.
+  const [dates, setDates] = useState<Record<number, string>>({});
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [done, setDone] = useState<string | null>(null);
   const dirty = useRef(false);
   const script = useRef<HTMLTextAreaElement>(null);
 
@@ -72,6 +77,23 @@ const DatesDialog: React.FC<DatesDialogProps> = ({ paperlessUrl, onClose }) => {
   };
   const ignore = (i: DateItem) => change(() => tidyApi.datesIgnore([{ doc_id: i.doc_id, rule: i.rule, title: i.title }]));
 
+  // The added day is the latest a document's own date can be, so it is where each field starts.
+  const newDate = (i: DateItem) => dates[i.doc_id] ?? day(i.added);
+  const pick = (id: number, on: boolean) =>
+    setPicked((old) => {
+      const next = new Set(old);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  const setCreated = (items: DateItem[]) =>
+    change(async () => {
+      setDone(null);
+      const action = await tidyApi.datesSetCreated(items.map((i) => ({ doc_id: i.doc_id, created: newDate(i) })));
+      setPicked(new Set());
+      setDone(`${action.summary}. It is in the log below the page, where it can be undone.`);
+    });
+
   // The clipboard API needs HTTPS; over plain HTTP the script is selected instead.
   const copy = async () => {
     const text = checks?.fix_script ?? "";
@@ -96,6 +118,8 @@ const DatesDialog: React.FC<DatesDialogProps> = ({ paperlessUrl, onClose }) => {
     );
   const reingest = (checks?.items ?? []).filter((i) => i.rule === "reingest");
   const after = (checks?.items ?? []).filter((i) => i.rule === "after_arrival");
+  const writes = checks?.writes ?? false;
+  const chosen = after.filter((i) => picked.has(i.doc_id));
   const ignored = checks?.ignored ?? [];
   const unchecked = checks?.unchecked ?? [];
   const th = "px-2 py-2 text-left font-medium";
@@ -106,8 +130,8 @@ const DatesDialog: React.FC<DatesDialogProps> = ({ paperlessUrl, onClose }) => {
         <div className="flex-1 space-y-6 overflow-y-auto px-6 py-4 text-sm">
           <p className="text-muted">
             A created date that differs from the added date is normal: most of an archive is old paper scanned later.
-            These two lists are the cases where a date is likely wrong. Nothing here changes paperless-ngx. An ignored
-            document leaves its list until you un-ignore it.
+            These two lists are the cases where a date is likely wrong. An ignored document leaves its list until you
+            un-ignore it.
           </p>
           {!checks && !error && <p className="text-muted">Loading…</p>}
           {(checks?.warnings ?? []).map((w) => (
@@ -213,8 +237,11 @@ const DatesDialog: React.FC<DatesDialogProps> = ({ paperlessUrl, onClose }) => {
               <p className="text-muted">
                 The created date is the document's own date, so it cannot be later than the day the document was
                 added. These are two days or more after it: usually a due date, an expiry date or a period end picked
-                as the document's date. Open one to correct it in paperless-ngx.
+                as the document's date. Each row starts from the day the document was added, the latest its own date
+                can be: open the document to read its real date, type it, tick the row and set it. paperless-ngx
+                renames the file where the storage path carries the date.
               </p>
+              {done && <p className="text-pos">{done}</p>}
               {after.length === 0 ? (
                 <p className="text-faint">None.</p>
               ) : (
@@ -222,22 +249,55 @@ const DatesDialog: React.FC<DatesDialogProps> = ({ paperlessUrl, onClose }) => {
                   <table className="w-full text-sm">
                     <thead className="border-b border-line bg-surface-2 text-xs text-muted">
                       <tr>
+                        <th className={th}>
+                          <input
+                            type="checkbox"
+                            aria-label="Select all"
+                            disabled={busy || !writes}
+                            checked={after.length > 0 && chosen.length === after.length}
+                            onChange={(e) => setPicked(e.target.checked ? new Set(after.map((i) => i.doc_id)) : new Set())}
+                          />
+                        </th>
                         <th className={th}>ID</th>
                         <th className={th}>Title</th>
                         <th className={th}>Created</th>
                         <th className={th}>Added</th>
                         <th className={th}>Days after</th>
+                        <th className={th}>New created date</th>
                         <th className={th} />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-line">
                       {after.map((i) => (
                         <tr key={i.doc_id}>
+                          <td className="px-2 py-1.5">
+                            <input
+                              type="checkbox"
+                              aria-label={`Select document ${i.doc_id}`}
+                              disabled={busy || !writes}
+                              checked={picked.has(i.doc_id)}
+                              onChange={(e) => pick(i.doc_id, e.target.checked)}
+                            />
+                          </td>
                           <td className="whitespace-nowrap px-2 py-1.5 tabular-nums">{idCell(i.doc_id)}</td>
                           <td className="px-2 py-1.5">{i.title}</td>
                           <td className="whitespace-nowrap px-2 py-1.5 tabular-nums">{day(i.created)}</td>
                           <td className="whitespace-nowrap px-2 py-1.5 tabular-nums">{day(i.added)}</td>
                           <td className="px-2 py-1.5 tabular-nums">{i.days}</td>
+                          <td className="px-2 py-1">
+                            <input
+                              type="date"
+                              aria-label={`New created date for document ${i.doc_id}`}
+                              className="rounded-md border border-line bg-transparent px-2 py-1 tabular-nums"
+                              disabled={busy || !writes}
+                              max={day(i.added)}
+                              value={newDate(i)}
+                              onChange={(e) => {
+                                setDates((old) => ({ ...old, [i.doc_id]: e.target.value }));
+                                pick(i.doc_id, e.target.value !== "");
+                              }}
+                            />
+                          </td>
                           <td className="px-2 py-1 text-right">
                             <Button size="sm" variant="ghost" onClick={() => ignore(i)} disabled={busy}>
                               Ignore
@@ -247,6 +307,19 @@ const DatesDialog: React.FC<DatesDialogProps> = ({ paperlessUrl, onClose }) => {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+              {after.length > 0 && (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    disabled={busy || !writes || chosen.length === 0 || chosen.some((i) => newDate(i) === "")}
+                    onClick={() => setCreated(chosen)}
+                  >
+                    Set the created date of {chosen.length} selected
+                  </Button>
+                  {!writes && <span className="text-xs text-warn">Tidy is read-only (TIDY_WRITES is off).</span>}
                 </div>
               )}
             </section>

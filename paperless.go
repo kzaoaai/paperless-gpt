@@ -844,6 +844,7 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 					// cause is a correspondent the API user cannot see.
 					log.Warnf("Document %d: could not use correspondent %q, applying the other changes without it: %v", documentID, document.SuggestedCorrespondent, err)
 					partialDroppedFields = append(partialDroppedFields, "correspondent")
+					recordRejectedValue(db, documentID, "correspondent", strings.TrimSpace(document.SuggestedCorrespondent), err)
 				} else {
 					originalFields["correspondent"] = originalDoc.Correspondent
 					updatedFields["correspondent"] = newCorrID
@@ -1101,6 +1102,7 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 				return fmt.Errorf("error updating document %d: %d, %s", documentID, resp.StatusCode, string(bodyBytes))
 			}
 
+			recordRejectedFields(db, documentID, updatedFields, bodyBytes, scalarFails, cfIdxFails)
 			newlyDropped := stripFailedFields(updatedFields, scalarFails, cfIdxFails)
 			if len(newlyDropped) == 0 {
 				// Paperless reported errors but they don't match anything in our

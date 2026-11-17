@@ -339,6 +339,25 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 		if title, ok := body["title"].(string); ok {
 			f.titles[id], d.Title = title, title
 		}
+		if created, ok := body["created"].(string); ok {
+			d.Created = created
+		}
+		if cf, ok := body["custom_fields"].([]any); ok {
+			// Like paperless-ngx: a text value over 128 characters is refused
+			// and nothing is changed.
+			var fields []tidyFieldValue
+			for i, e := range cf {
+				entry := e.(map[string]any)
+				if text, isText := entry["value"].(string); isText && len(text) > 128 {
+					writeJSON(w, 400, map[string]any{"custom_fields": map[string]any{strconv.Itoa(i): map[string]any{
+						"non_field_errors": []string{"Ensure this value has at most 128 characters (it has " + strconv.Itoa(len(text)) + ")."}}}})
+					return
+				}
+				raw, _ := json.Marshal(entry["value"])
+				fields = append(fields, tidyFieldValue{Field: int(entry["field"].(float64)), Value: raw})
+			}
+			d.CustomFields = fields
+		}
 		if tags, ok := body["tags"]; ok {
 			var full []int
 			for _, t := range toInts(tags) {
@@ -428,7 +447,7 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 func newTestTidy(t *testing.T, f *fakePaperless) *tidyService {
 	db, err := InitializeTestDB()
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}, &TidyTitleRun{}, &TidyTitleIgnore{}, &TidyDateIgnore{}, &TidyDateSource{}))
+	require.NoError(t, db.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}, &TidyTitleRun{}, &TidyTitleIgnore{}, &TidyDateIgnore{}, &TidyDateSource{}, &ProcessingFailure{}))
 	return &tidyService{client: f.client(), db: db, writes: true, viewer: "mcp-reader",
 		configRefs: func() tidyConfigRefs {
 			return tidyConfigRefs{TagNames: map[string]string{"paperless-gpt": "AUTO_TAG"}, CustomFieldIDs: map[int]string{}}

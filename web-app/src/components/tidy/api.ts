@@ -283,6 +283,44 @@ export interface DateChecks {
   unchecked: number[];
   fix_script?: string;
   warnings: string[];
+  /** created dates can be set from the dialog (TIDY_WRITES) */
+  writes: boolean;
+}
+
+export interface FailedField {
+  /** "custom_fields" (with field_id) or the name of a document field */
+  field: string;
+  field_id?: number;
+  name: string;
+  data_type?: string;
+  /** what paperless-gpt sent and what paperless-ngx answered */
+  sent: string;
+  error: string;
+  max_length?: number;
+  advice: string;
+  /** what the document holds in that field today */
+  current: string;
+  editable: boolean;
+}
+
+export interface FailedDoc {
+  doc_id: number;
+  title: string;
+  added: string;
+  /** unknown: paperless-gpt has no record of why */
+  kind: "rejected_field" | "gave_up" | "unknown";
+  failed_at?: string;
+  summary: string;
+  advice: string;
+  fields: FailedField[];
+  /** the tag "Run again" puts back on the document; empty when it no longer exists */
+  retry_tag: string;
+}
+
+export interface FailedView {
+  items: FailedDoc[];
+  fail_tag: string;
+  writes: boolean;
 }
 
 export interface TitleStatus {
@@ -415,6 +453,12 @@ export const tidyApi = {
     call<{ ignored: number }>("POST", "dates/ignore", { items }),
   datesUnignore: (items: { doc_id: number; rule: DateRule }[]) =>
     call<{ unignored: number }>("POST", "dates/unignore", { items }),
+  datesSetCreated: (items: { doc_id: number; created: string }[]) => call<Action>("POST", "dates/created", { items }),
+  failed: () => call<FailedView>("GET", "failed"),
+  failedFix: (doc_id: number, values: { field: string; field_id?: number; value: string }[]) =>
+    call<Action>("POST", "failed/fix", { doc_id, values }),
+  failedClear: (doc_ids: number[]) => call<Action>("POST", "failed/clear", { doc_ids }),
+  failedRetry: (doc_ids: number[]) => call<Action>("POST", "failed/retry", { doc_ids }),
   fillIgnore: (items: { doc_id: number; title: string }[]) =>
     call<{ ignored: number }>("POST", "fill/ignore", { items }),
   fillUnignore: (doc_ids: number[]) => call<{ unignored: number }>("POST", "fill/unignore", { doc_ids }),

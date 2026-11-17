@@ -98,6 +98,14 @@ type tidyDateChecks struct {
 	// the paperless-ngx shell.
 	FixScript string   `json:"fix_script,omitempty"`
 	Warnings  []string `json:"warnings"`
+	// Writes: created dates can be set from the dialog (TIDY_WRITES).
+	Writes bool `json:"writes"`
+}
+
+// tidyDateSetItem is a created date to give one document.
+type tidyDateSetItem struct {
+	DocID   int    `json:"doc_id"`
+	Created string `json:"created"`
 }
 
 type tidyDateIgnoreItem struct {
@@ -329,7 +337,7 @@ func (s *tidyService) dateChecks(ctx context.Context, docs []tidyDoc) (*tidyDate
 			return nil, err
 		}
 	}
-	out := &tidyDateChecks{Items: []tidyDateItem{}, Ignored: []tidyDateIgnored{}, Unchecked: []int{}, Warnings: []string{}}
+	out := &tidyDateChecks{Items: []tidyDateItem{}, Ignored: []tidyDateIgnored{}, Unchecked: []int{}, Warnings: []string{}, Writes: s.writes}
 	trash, err := tidyFetchTrash(ctx, s.client)
 	if err != nil {
 		out.Warnings = append(out.Warnings, "Could not read paperless-ngx's trash, so split or merged documents whose source is there were not checked: "+err.Error())
@@ -448,4 +456,108 @@ func (s *tidyService) unignoreDates(items []tidyDateIgnoreItem) (int, error) {
 	}
 	s.invalidate()
 	return removed, nil
+}
+
+// setCreatedDates gives documents the created dates chosen in the dialog. The
+// created date is part of the file name under most storage paths, so
+// paperless-ngx renames each file.
+func (s *tidyService) setCreatedDates(ctx context.Context, items []tidyDateSetItem) (*TidyAction, error) {
+	if err := s.requireWrites(); err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, tidyRefuse("nothing selected")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer s.invalidate()
+
+	ids := make([]int, len(items))
+	for i, it := range items {
+		ids[i] = it.DocID
+	}
+	current, err := tidyDocsByIDs(ctx, s.client, tidyUniqueSorted(ids))
+	if err != nil {
+		return nil, err
+	}
+	now := map[int]tidyDoc{}
+	for _, d := range current {
+		now[d.ID] = d
+	}
+	detail := &tidyActionDetail{}
+	seen := map[int]bool{}
+	skipped := 0
+	for _, it := range items {
+		created := strings.TrimSpace(it.Created)
+		if _, err := time.Parse("2006-01-02", created); err != nil {
+			return nil, tidyRefuse("%q is not a date like 2026-01-31 (document %d)", it.Created, it.DocID)
+		}
+		d, ok := now[it.DocID]
+		if !ok || seen[it.DocID] || (len(d.Created) >= 10 && d.Created[:10] == created) {
+			skipped++
+			continue
+		}
+		seen[it.DocID] = true
+		detail.Dates = append(detail.Dates, tidyTitleChange{ID: d.ID, Before: d.Created, After: created})
+	}
+	if len(detail.Dates) == 0 {
+		return nil, tidyRefuse("no selected date differs from what the document already has")
+	}
+	a := &TidyAction{Action: "created_dates", Kind: "documents", Status: "started",
+		Summary: "Set the created date of " + tidyCount(len(detail.Dates), "document")}
+	if skipped > 0 {
+		a.Summary += fmt.Sprintf("; skipped %d (unchanged or gone)", skipped)
+	}
+	s.saveAction(a, detail)
+	for i, ch := range detail.Dates {
+		if err := tidySend(ctx, s.client, "PATCH", fmt.Sprintf("api/documents/%d/", ch.ID), map[string]any{"created": ch.After}, nil); err != nil {
+			detail.Dates = detail.Dates[:i] // only the ones that were set, so undo touches nothing else
+			a.Status, a.Error = "partial", fmt.Sprintf("setting the created date of document %d: %v", ch.ID, err)
+			s.saveAction(a, detail)
+			return a, err
+		}
+	}
+	a.Status = "done"
+	s.saveAction(a, detail)
+	return a, nil
+}
+
+// undoCreatedDates puts the old created dates back where the documents still
+// carry the date that was set.
+func (s *tidyService) undoCreatedDates(ctx context.Context, d *tidyActionDetail, force bool) (string, error) {
+	ids := make([]int, len(d.Dates))
+	for i, ch := range d.Dates {
+		ids[i] = ch.ID
+	}
+	current, err := tidyDocsByIDs(ctx, s.client, tidyUniqueSorted(ids))
+	if err != nil {
+		return "", err
+	}
+	now := map[int]tidyDoc{}
+	for _, doc := range current {
+		now[doc.ID] = doc
+	}
+	var back []tidyTitleChange
+	var drifted []int
+	for _, ch := range d.Dates {
+		if doc, ok := now[ch.ID]; ok && strings.HasPrefix(doc.Created, ch.After) {
+			back = append(back, ch)
+		} else {
+			drifted = append(drifted, ch.ID)
+		}
+	}
+	drifted = tidyUniqueSorted(drifted)
+	if len(drifted) > 0 && !force {
+		return "", &tidyRefusal{Message: fmt.Sprintf("%d documents changed since; undo the rest anyway?", len(drifted)), DriftedDocs: drifted}
+	}
+	for _, ch := range back {
+		if err := tidySend(ctx, s.client, "PATCH", fmt.Sprintf("api/documents/%d/", ch.ID), map[string]any{"created": ch.Before}, nil); err != nil {
+			return "", fmt.Errorf("restoring the created date of document %d: %w", ch.ID, err)
+		}
+	}
+	note := "Put the old created date back on " + tidyCount(len(back), "document")
+	if len(drifted) > 0 {
+		note += fmt.Sprintf("; left %d that changed since: %s", len(drifted), tidyJoinInts(drifted))
+	}
+	return note, nil
 }

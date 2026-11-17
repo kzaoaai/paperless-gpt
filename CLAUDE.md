@@ -166,8 +166,9 @@ custom fields. Go: `tidy_paperless.go` (API calls), `tidy_findings.go` (inventor
 findings), `tidy_actions.go` (actions, log, undo, aliases), `tidy_routes.go` (`/api/tidy/...`),
 `tidy_llm.go` (LLM duplicate groups), `tidy_hygiene.go` (archive health, custom-field values),
 `tidy_split.go` (splitting a catch-all correspondent), `tidy_fill.go` (filling missing tags and types),
-`tidy_titles.go` (re-checking titles), `tidy_dates.go` (date checks). Tests: `tidy_test.go`,
-`tidy_v11_test.go`, `tidy_titles_test.go` and `tidy_dates_test.go`,
+`tidy_titles.go` (re-checking titles), `tidy_dates.go` (date checks), `tidy_failed.go` (documents
+marked failed). Tests: `tidy_test.go`,
+`tidy_v11_test.go`, `tidy_titles_test.go`, `tidy_dates_test.go` and `tidy_failed_test.go`,
 against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rules.
 `tidy_demo_test.go` serves the real routes and the built web app against that fake, with fixed
 stub answers in place of the LLM, on one local port: the way to try the page with no
@@ -323,7 +324,11 @@ paperless-ngx, no container and no model (its header has the command; skipped un
     clipboard API needs HTTPS and :8080 is plain HTTP.
   - **Dated after they arrived** (`after_arrival`): the created date is two days or more after
     the day the document was added, taken in the offset `added` carries (the server's time
-    zone). One day is what a time-zone difference explains. Fixed by hand in paperless-ngx.
+    zone). One day is what a time-zone difference explains. The dialog can set the created date
+    (`setCreatedDates`, `POST /api/tidy/dates/created`, needs `TIDY_WRITES`, undoable): each
+    row has a date field that starts from the added day, the latest the real date can be, and
+    only ticked rows are written. paperless-ngx renames the file where the storage path carries
+    the date.
   Each row can be ignored per rule (`tidy_date_ignores`, paperless-gpt's own, works read-only);
   the ignored list says when a document has been fixed since. Checked on the demo server
   (2026-11-17): both tables, the script, Ignore and the tile count after closing; Un-ignore
@@ -335,7 +340,34 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   stays not checked, with nothing added between its source and it. All three outcomes match a
   direct database query. The dialog's script was then run for the listed one in the
   paperless-ngx shell: the date changed, the file name did not, `modified` moved to now, and the
-  piece left the list.
+  piece left the list. Setting created dates has been checked only on the demo server and in the
+  Go test.
+- Failed documents (`failure_log.go`, `tidy_failed.go`, `FailedDialog.tsx`; the "Marked failed by
+  paperless-gpt" tile opens the dialog when its count is above zero). The fail tag used to say
+  nothing: the reason was a log line. Now paperless-gpt keeps it in `processing_failures`
+  (`ProcessingFailure`; the table is created on first use, so it does not depend on Tidy):
+  - `rejected_field`: paperless-ngx refused one suggested value and the rest was applied.
+    Recorded in `UpdateDocuments` right before `stripFailedFields`, from the same parse of the
+    400 answer, with the value that was sent and paperless-ngx's message
+    (`recordRejectedFields`); a correspondent that could not be created is recorded the same
+    way. Those two calls and the ones below are the only lines added to upstream's files.
+  - `gave_up`: processing stopped and the queue tag came off (`markProcessingFailed`), with the
+    tag it was queued under and the reason; `recoverFromFailedUpdate` now takes the error that
+    failed the update, so the reason carries it.
+  The dialog shows, per document, what happened in a sentence, what to do, and three ways out,
+  each logged and undoable: save a corrected value and clear the mark in one PATCH, so a value
+  refused again changes nothing and paperless-ngx's message is shown (`fixFailed`; text, number,
+  date and monetary custom fields, title and created date; a length limit in the message turns
+  into a live character count); clear the mark (`clearFailed`); or run it again, which swaps the
+  fail tag for the tag the document was queued under, else `AUTO_TAG`. Only a document's latest
+  round of records counts (within an hour of the newest, the later of two for one field), and
+  an action closes them (`resolved_at`, `resolved_by`); undo reopens them. A marked document
+  with no record says so: it was marked before this existed, or by hand.
+  The custom-field prompt already tells the model to stay under 128 characters and the model
+  still sent 132 for a text field once (2026-11-17), so the prompt does not prevent this.
+  Checked on the demo server (all three actions, the count, the log) and in the Go tests,
+  which also cover the record written by a real `UpdateDocuments` call. Not yet run against a
+  real paperless-ngx.
 - bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
   Document Updated workflows run on them; the merge preview lists the enabled ones.
 - Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes

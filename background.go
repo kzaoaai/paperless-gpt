@@ -179,6 +179,7 @@ func markProcessingFailed(ctx context.Context, client ClientInterface, db *gorm.
 	if err := client.UpdateDocuments(ctx, []DocumentSuggestion{recoveryFields}, db, false); err != nil {
 		return err
 	}
+	recordProcessingGaveUp(db, document.ID, removeTag, reason)
 	if failTag != "" {
 		docLogger.Warnf("Document %d %s; %q tag removed and %q tag applied to break the processing loop.", document.ID, reason, removeTag, failTag)
 	} else {
@@ -193,8 +194,15 @@ func markProcessingFailed(ctx context.Context, client ClientInterface, db *gorm.
 // On its own failure, this function logs at error level but does not return
 // the error to the caller — the caller has already recorded the original
 // update failure and the recovery is best-effort.
-func recoverFromFailedUpdate(ctx context.Context, client ClientInterface, db *gorm.DB, document Document, removeTag string) {
-	if err := markProcessingFailed(ctx, client, db, document, removeTag, "update failed"); err != nil {
+//
+// cause, when given, is the error that failed the update; it goes into the
+// record the Tidy page reads.
+func recoverFromFailedUpdate(ctx context.Context, client ClientInterface, db *gorm.DB, document Document, removeTag string, cause ...error) {
+	reason := "update failed"
+	if len(cause) > 0 && cause[0] != nil {
+		reason += ": " + cause[0].Error()
+	}
+	if err := markProcessingFailed(ctx, client, db, document, removeTag, reason); err != nil {
 		documentLogger(document.ID).Errorf("Recovery update for failed document %d also failed: %v. The %q tag may still be present and the document may be re-processed on the next poll cycle.", document.ID, err, removeTag)
 	}
 }
@@ -341,7 +349,7 @@ func (app *App) processTagDocuments(ctx context.Context, triggerTag string) (int
 				docLogger.Error(err.Error())
 				errs = append(errs, err)
 				app.Database.Delete(&PendingReview{}, document.ID)
-				recoverFromFailedUpdate(ctx, app.Client, app.Database, document, triggerTag)
+				recoverFromFailedUpdate(ctx, app.Client, app.Database, document, triggerTag, err)
 				continue
 			}
 			processedCount++
@@ -364,7 +372,7 @@ func (app *App) processTagDocuments(ctx context.Context, triggerTag string) (int
 			err = fmt.Errorf("error updating document %d: %w", document.ID, err)
 			docLogger.Error(err.Error())
 			errs = append(errs, err)
-			recoverFromFailedUpdate(ctx, app.Client, app.Database, document, triggerTag)
+			recoverFromFailedUpdate(ctx, app.Client, app.Database, document, triggerTag, err)
 			continue
 		}
 
@@ -489,7 +497,7 @@ func (app *App) runWorkflowDocumentOCR(ctx context.Context, document Document, w
 			return &document, nil
 		}
 		docLogger.Errorf("Update after workflow OCR failed: %v", err)
-		recoverFromFailedUpdate(ctx, app.Client, app.Database, document, triggerTag)
+		recoverFromFailedUpdate(ctx, app.Client, app.Database, document, triggerTag, err)
 		return nil, fmt.Errorf("document %d update after workflow OCR error: %w", document.ID, err)
 	}
 
@@ -707,7 +715,7 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 				}
 				docLogger.Errorf("Update after OCR failed: %v", err)
 				errs = append(errs, fmt.Errorf("document %d update error: %w", document.ID, err))
-				recoverFromFailedUpdate(ctx, app.Client, app.Database, document, autoOcrTag)
+				recoverFromFailedUpdate(ctx, app.Client, app.Database, document, autoOcrTag, err)
 				continue
 			}
 		}
