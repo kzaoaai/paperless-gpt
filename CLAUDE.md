@@ -330,10 +330,12 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   only in the Go test. In production (deployed 2026-11-17) the endpoint lists no split or merged
   piece from a source it could read and 14 documents dated after arrival, the same 14 a direct
   database query gave. Three pieces of "edit PDF into new documents" had sources that left the
-  trash before Tidy first ran. With the estimate (deployed the same day) one is listed, made
+  trash before Tidy first ran. With the estimate (deployed the same day) one was listed, made
   230 days after the document that followed its source; one is not, made 13 hours after; one
   stays not checked, with nothing added between its source and it. All three outcomes match a
-  direct database query.
+  direct database query. The dialog's script was then run for the listed one in the
+  paperless-ngx shell: the date changed, the file name did not, `modified` moved to now, and the
+  piece left the list.
 - bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
   Document Updated workflows run on them; the merge preview lists the enabled ones.
 - Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes
