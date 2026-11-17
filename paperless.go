@@ -1906,6 +1906,7 @@ func (client *PaperlessClient) CreateOrGetCorrespondent(ctx context.Context, cor
 		return 0, err
 	}
 
+	client.grantViewerOnCreated(ctx, "correspondents", createdCorrespondent.ID)
 	return createdCorrespondent.ID, nil
 }
 
@@ -2115,6 +2116,7 @@ func (client *PaperlessClient) CreateTag(ctx context.Context, tagName string) (i
 		return 0, fmt.Errorf("error parsing created tag response: %w", err)
 	}
 
+	client.grantViewerOnCreated(ctx, "tags", createdTag.ID)
 	return createdTag.ID, nil
 }
 

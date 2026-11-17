@@ -30,10 +30,7 @@ func registerTidy(router *gin.Engine, api *gin.RouterGroup, app *App) {
 			return
 		}
 	}
-	viewer := strings.TrimSpace(os.Getenv("TIDY_VIEWER_USER"))
-	if viewer == "" {
-		viewer = "mcp-reader"
-	}
+	viewer := viewerUserName()
 	s := &tidyService{
 		client:     client,
 		db:         app.Database,

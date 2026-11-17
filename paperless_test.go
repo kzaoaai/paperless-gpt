@@ -65,6 +65,13 @@ func newTestEnv(t *testing.T) *testEnv {
 		w.Write([]byte(`{"results": [{"id": 1, "name": "Alpha"}, {"id": 2, "name": "Beta"}]}`))
 	})
 
+	// No viewer user by default, so creating a correspondent or tag grants
+	// nothing (see viewer_grant.go).
+	env.setMockResponse("/api/users/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"results": []}`))
+	})
+
 	// Add mock response for /api/document_types/
 	env.setMockResponse("/api/document_types/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

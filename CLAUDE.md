@@ -176,6 +176,9 @@ paperless-ngx, no container and no model (its header has the command; skipped un
 - **Read-only unless `TIDY_WRITES=true`.** :8080 has no login, and these are the first actions
   here that delete things. `TIDY_VIEWER_USER` (default `mcp-reader`) is the user the
   "hidden from" finding and the grant-view fix are about.
+  Correspondents and tags paperless-gpt creates while processing (`CreateOrGetCorrespondent`,
+  `CreateTag`) get that user's view grant as they are created (`viewer_grant.go`), so they no
+  longer wait for the grant-view fix; a missing viewer user or a refused grant is only logged.
 - Inventory: one pass over every root document (paperless-ngx 3.0's list leaves file-version rows
   out) gives each object's count and newest `created`/`added`. Findings: no documents and nothing
   using it (queue and marker tags are empty by design, so in-use ones are not listed); near-duplicate
