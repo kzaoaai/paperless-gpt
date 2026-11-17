@@ -919,6 +919,7 @@ func (client *PaperlessClient) UpdateDocuments(ctx context.Context, documents []
 		for _, sf := range document.SuggestedCustomFields {
 			dataType := customFieldTypes[sf.ID]
 			value := normalizeCustomFieldValue(dataType, sf.Value)
+			value = fitCustomFieldText(documentID, sf, dataType, value) // fork: an over-long text is cut, not refused
 			if err := validateCustomFieldValue(dataType, value); err != nil {
 				log.Warnf("Document %d: custom field %q (id %d) value %v is not valid for its %s type, skipping. (%v)", documentID, sf.Name, sf.ID, sf.Value, dataType, err)
 				continue

@@ -130,6 +130,9 @@ func tidyFailedFieldEntry(d tidyDoc, r ProcessingFailure, fields map[int]tidyObj
 		f.MaxLength, _ = strconv.Atoi(m[1])
 	}
 	switch {
+	case f.MaxLength > 0 && f.Editable && r.Value == "":
+		// A record written by hand from the log, which did not have the text.
+		f.Advice = fmt.Sprintf("The text was longer than the %d characters this field holds. Write a shorter one and save.", f.MaxLength)
 	case f.MaxLength > 0 && f.Editable:
 		f.Advice = fmt.Sprintf("The text is %d characters and this field holds %d at most. Shorten it and save.", len([]rune(r.Value)), f.MaxLength)
 	case r.Field == "correspondent":

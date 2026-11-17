@@ -122,6 +122,18 @@ func TestTidyFailedViewExplains(t *testing.T) {
 	assert.Contains(t, c.Summary, "no record")
 }
 
+// A record written by hand from the log has the message and not the text: the
+// advice must not count the characters of a text it does not have.
+func TestTidyFailedFieldWithoutRecordedValue(t *testing.T) {
+	fields := map[int]tidyObject{1: {ID: 1, Name: "Details", DataType: "string"}}
+	f := tidyFailedFieldEntry(tidyDoc{ID: 50}, ProcessingFailure{DocumentID: 50, Kind: failureRejectedField, Field: "custom_fields", FieldID: 1,
+		Reason: "Ensure this value has at most 128 characters (it has 132)."}, fields)
+	assert.True(t, f.Editable)
+	assert.Equal(t, 128, f.MaxLength)
+	assert.Equal(t, "", f.Sent)
+	assert.Equal(t, "The text was longer than the 128 characters this field holds. Write a shorter one and save.", f.Advice)
+}
+
 func TestTidyFailedFixClearRetryUndo(t *testing.T) {
 	f, s := failedFixture(t)
 	ctx := context.Background()
