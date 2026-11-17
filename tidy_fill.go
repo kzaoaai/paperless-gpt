@@ -205,6 +205,9 @@ func (s *tidyService) fillStatus(ctx context.Context) (*tidyFillStatus, error) {
 			it := tidyFillIgnored{TidyFillIgnore: r}
 			if d, ok := byID[r.DocID]; ok {
 				it.NoTags, it.NoType = len(d.Tags) == 0, d.DocumentType == nil
+				if d.Title != "" {
+					it.Title = d.Title // today's title, not the one stored when it was ignored
+				}
 			} else {
 				it.Gone = true
 			}
@@ -394,6 +397,9 @@ func (s *tidyService) fillView(ctx context.Context, id uint) (*tidyFillView, err
 			Ignored: ignored[r.DocID], Tags: []tidyFillTag{}, TagNames: []string{}, TagIDs: []int{}, UnknownTags: []string{}}
 		if d, ok := now[r.DocID]; ok {
 			it.HasTagsNow, it.HasTypeNow = len(d.Tags) > 0, d.DocumentType != nil
+			if d.Title != "" {
+				it.Title = d.Title // today's title, not the one the run saw
+			}
 		}
 		for _, name := range r.Tags {
 			if canonical, id, ok := lookupTagID(tagIDs, name); ok {

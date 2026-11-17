@@ -223,8 +223,11 @@ func (s *tidyService) splitView(ctx context.Context, id uint) (*tidySplitView, e
 		return nil, err
 	}
 	onBucket := map[int]bool{}
+	// Titles change after a run (a title re-check, a hand edit); show today's.
+	titleNow := map[int]string{}
 	for _, d := range current {
 		onBucket[d.ID] = d.Correspondent != nil && *d.Correspondent == run.CorrespondentID
+		titleNow[d.ID] = d.Title
 	}
 
 	view := &tidySplitView{Run: *run, Groups: []tidySplitGroup{}, Failed: []tidySplitResult{}}
@@ -263,7 +266,11 @@ func (s *tidyService) splitView(ctx context.Context, id uint) (*tidySplitView, e
 			}
 			groups[key] = g
 		}
-		g.Docs = append(g.Docs, tidySplitDoc{ID: r.DocID, Title: r.Title, Moved: !onBucket[r.DocID]})
+		title := r.Title
+		if t := titleNow[r.DocID]; t != "" {
+			title = t
+		}
+		g.Docs = append(g.Docs, tidySplitDoc{ID: r.DocID, Title: title, Moved: !onBucket[r.DocID]})
 	}
 	for _, g := range groups {
 		view.Groups = append(view.Groups, *g)

@@ -260,7 +260,9 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   `typeCell`); checked the same way on the demo server.
   The dialog opens on the last run's answers and says so ("Answers from the last run … A new
   run replaces them."); rows filled since that run are left out until "Show N already filled"
-  is clicked (`isFilled`). Checked on the demo server: apply, reopen, toggle.
+  is clicked (`isFilled`). Checked on the demo server: apply, reopen, toggle. Rows show each
+  document's title as it is now, read with the run view, not the title the run saw; Split groups
+  and Fill's ignored list do the same, so a retitle shows up there at once.
   An ignored document leaves the table at once (it used to stay, faded, which read as "ignore
   did nothing"); "Show N ignored" above the table is the one place they are listed, with
   Un-ignore, which puts a document of the current run back in the table. That list is a table

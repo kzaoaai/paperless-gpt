@@ -404,6 +404,19 @@ func TestTidyFillIgnoreList(t *testing.T) {
 	assert.False(t, items[3].Ignored)
 	assert.Equal(t, []tidyFillTag{{ID: 11, Name: "Payment"}, {ID: 10, Name: "Taxes"}}, items[3].Tags, "each tag once, id with its name")
 
+	// A title changed after the run shows as it is now, in the run and in the ignore list.
+	f.titles[3], f.titles[2] = "Retitled since", "Retitled too"
+	view, err = s.fillView(ctx, run.ID)
+	require.NoError(t, err)
+	for _, it := range view.Items {
+		if it.DocID == 3 {
+			assert.Equal(t, "Retitled since", it.Title)
+		}
+	}
+	st, err = s.fillStatus(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "Retitled too", st.Ignored[len(st.Ignored)-1].Title)
+
 	// Only some of the suggested tags are kept on the page.
 	a, err := s.applyFill(ctx, run.ID, []tidyFillApplyItem{{DocID: 3, TagIDs: []int{10}}})
 	require.NoError(t, err)
