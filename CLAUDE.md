@@ -331,8 +331,10 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   `:d3527854ff7e044f03271a5ad7d28732a9e3ccfd`; earlier Tidy builds `d352785`, `b12aebd`,
   `c34e365`, `62659dd`, `341b7f2`, `c846093`, `db9990f`,
   `262c118`, `7ee17ad`, `20b4767`, `6c44ced`, `03162b2`, `59b98de`, `1d87a5a`), with
-  `TIDY_WRITES: "true"` in the compose since 2026-11-14. Splits have run in production (Gemini's
-  answers were sensible when the bucket was left out); three fill runs have, and the usable answers of the second and third were applied. A database backup taken right before writes were enabled is on the CT; the homelable
+  `TIDY_WRITES: "true"` in the compose since 2026-11-14. `:latest` is `32b2c36`, the same
+  application code plus the CI change, so the image card's update to it can be skipped. Splits,
+  fills (five runs over the whole archive) and title re-checks (554 titles) have run in
+  production and been applied. A database backup taken right before writes were enabled is on the CT; the homelable
   page's Changelog has the path and the restore command. Before it, `30ac1b1`
   (deployed 2026-10-31) with `GOOGLEAI_THINKING_LEVEL=low`; before that,
   `9068471` (deployed 2026-10-25): the 2026-10-25 upstream sync on top of the Vertex backend, on
