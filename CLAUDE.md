@@ -329,12 +329,11 @@ paperless-ngx, no container and no model (its header has the command; skipped un
 
 ### Open items
 
-- Production runs `7c49471` (deployed 2026-11-17: Re-check titles; rollback image
-  `:d3527854ff7e044f03271a5ad7d28732a9e3ccfd`; earlier Tidy builds `d352785`, `b12aebd`,
+- Production runs `f15b944` (deployed 2026-11-17: Fill and Split show current titles; rollback
+  image `:7c494713df771c4ff4b0fdaddd896cccad113350`; earlier Tidy builds `7c49471`, `d352785`, `b12aebd`,
   `c34e365`, `62659dd`, `341b7f2`, `c846093`, `db9990f`,
   `262c118`, `7ee17ad`, `20b4767`, `6c44ced`, `03162b2`, `59b98de`, `1d87a5a`), with
-  `TIDY_WRITES: "true"` in the compose since 2026-11-14. `:latest` is `32b2c36`, the same
-  application code plus the CI change, so the image card's update to it can be skipped. Splits,
+  `TIDY_WRITES: "true"` in the compose since 2026-11-14. Splits,
   fills (five runs over the whole archive) and title re-checks (554 titles) have run in
   production and been applied. A database backup taken right before writes were enabled is on the CT; the homelable
   page's Changelog has the path and the restore command. Before it, `30ac1b1`
