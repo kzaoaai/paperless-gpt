@@ -366,8 +366,10 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   The custom-field prompt already tells the model to stay under 128 characters and the model
   still sent 132 for a text field once (2026-11-17), so the prompt does not prevent this.
   Checked on the demo server (all three actions, the count, the log) and in the Go tests,
-  which also cover the record written by a real `UpdateDocuments` call. Not yet run against a
-  real paperless-ngx.
+  which also cover the record written by a real `UpdateDocuments` call. In production (deployed
+  2026-11-17) the view has been read: it lists the one marked document, without a record since
+  it was marked before the deploy. No action has been run there yet, and no failure has been
+  recorded by live processing yet.
 - bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
   Document Updated workflows run on them; the merge preview lists the enabled ones.
 - Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes
@@ -405,8 +407,9 @@ paperless-ngx, no container and no model (its header has the command; skipped un
 
 ### Open items
 
-- Production runs `ba87321` (deployed 2026-11-17: the date checks' estimate for a gone source;
-  rollback image `:e2933e9ec8a251a4f082bd0c7d910c4c0594d40f`; earlier builds `e2933e9` (the date
+- Production runs `bf55da6` (deployed 2026-11-17: the failure record, the failed-documents dialog
+  and setting created dates; rollback image `:ba87321d61a1d7b8b3c100e7aef0acdf90c6c8d4`; earlier
+  builds `ba87321` (the date checks' estimate for a gone source), `e2933e9` (the date
   checks), `cf4ebfa` (new correspondents and
   tags get the viewer's view grant), `f15b944` (Fill and Split show current titles), `7c49471`, `d352785`, `b12aebd`,
   `c34e365`, `62659dd`, `341b7f2`, `c846093`, `db9990f`,
