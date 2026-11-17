@@ -166,7 +166,8 @@ custom fields. Go: `tidy_paperless.go` (API calls), `tidy_findings.go` (inventor
 findings), `tidy_actions.go` (actions, log, undo, aliases), `tidy_routes.go` (`/api/tidy/...`),
 `tidy_llm.go` (LLM duplicate groups), `tidy_hygiene.go` (archive health, custom-field values),
 `tidy_split.go` (splitting a catch-all correspondent), `tidy_fill.go` (filling missing tags and types),
-`tidy_titles.go` (re-checking titles). Tests: `tidy_test.go`, `tidy_v11_test.go` and `tidy_titles_test.go`,
+`tidy_titles.go` (re-checking titles), `tidy_dates.go` (date checks). Tests: `tidy_test.go`,
+`tidy_v11_test.go`, `tidy_titles_test.go` and `tidy_dates_test.go`,
 against a stateful fake paperless that applies paperless-ngx 3.0's tag-tree rules.
 `tidy_demo_test.go` serves the real routes and the built web app against that fake, with fixed
 stub answers in place of the LLM, on one local port: the way to try the page with no
@@ -295,6 +296,31 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   is skipped, so a hand edit is never overwritten. Undo puts the old title back where the applied one
   is still there. The file name match catches names a person chose too, so nothing is applied
   without being selected. Checked on the demo server: run, ignore, edit, Shift-click, apply, undo.
+- Date checks (`tidy_dates.go`, `DatesDialog.tsx`; two tiles under Archive health that open the
+  dialog; read-only). A created date that differs from the added date is not a finding: most
+  of an archive is old paper scanned later (in production 923 of 1,200 documents differ by more
+  than a week). The two rules:
+  - **Split or merged, dated as new** (`reingest`): paperless-ngx consumes the output of split,
+    merge and "edit PDF into new documents" as new documents, so a piece of an old document is
+    added "now". The upload file name names the source (`96_1-1.pdf`, `12_15_merged.pdf`,
+    `96_edit_0.pdf`; `tidyReingestOrigin`, ids must be below the document's own). Listed when the
+    piece was added more than a day after its source (a merge: the newest of its sources); a
+    same-day split is ordinary intake. The source's date is read from the documents, then from
+    `GET /api/trash/` (which ignores `fields` and returns full documents), and is remembered in
+    `tidy_date_sources`, because paperless-ngx empties its trash (30 days by default) and the
+    date goes with it. A piece whose source is gone and was never seen is reported as not checked.
+    `added` cannot be written through the API (`editable=False` on the model), so there is no
+    button: the dialog shows a script for the paperless-ngx shell (`tidyDateFixScript`: an ORM
+    `update` of `added`, then `bulk_update_documents`, which refreshes the index and runs
+    Document Updated workflows). The Copy button falls back to selecting the text, since the
+    clipboard API needs HTTPS and :8080 is plain HTTP.
+  - **Dated after they arrived** (`after_arrival`): the created date is two days or more after
+    the day the document was added, taken in the offset `added` carries (the server's time
+    zone). One day is what a time-zone difference explains. Fixed by hand in paperless-ngx.
+  Each row can be ignored per rule (`tidy_date_ignores`, paperless-gpt's own, works read-only);
+  the ignored list says when a document has been fixed since. Checked on the demo server
+  (2026-11-17): both tables, the script, Ignore and the tile count after closing; Un-ignore
+  only in the Go test. Not yet run against a real paperless-ngx.
 - bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
   Document Updated workflows run on them; the merge preview lists the enabled ones.
 - Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes

@@ -242,6 +242,44 @@ export interface TitleIgnored {
   gone: boolean;
 }
 
+export type DateRule = "reingest" | "after_arrival";
+
+export interface DateItem {
+  doc_id: number;
+  title: string;
+  created: string;
+  added: string;
+  rule: DateRule;
+  /** after_arrival: days the created date lies after the added day */
+  days?: number;
+  /** reingest: split, merge or edit, the documents it was made from, and the added date it should carry */
+  origin?: string;
+  source_ids?: number[];
+  source_added?: string;
+  /** where that date was read: document, trash, or remembered once the source is gone */
+  source_state?: string;
+}
+
+export interface DateIgnored {
+  doc_id: number;
+  rule: DateRule;
+  title: string;
+  created_at: string;
+  current: string;
+  gone: boolean;
+  /** the rule would still list the document today */
+  flagged: boolean;
+}
+
+export interface DateChecks {
+  items: DateItem[];
+  ignored: DateIgnored[];
+  /** split or merged documents whose source is gone and was never seen */
+  unchecked: number[];
+  fix_script?: string;
+  warnings: string[];
+}
+
 export interface TitleStatus {
   candidates: number;
   documents: number;
@@ -367,6 +405,11 @@ export const tidyApi = {
   titlesUnignore: (doc_ids: number[]) => call<{ unignored: number }>("POST", "titles/unignore", { doc_ids }),
   titlesApply: (run_id: number, items: { doc_id: number; title: string }[]) =>
     call<Action>("POST", "titles/apply", { run_id, items }),
+  dates: () => call<DateChecks>("GET", "dates"),
+  datesIgnore: (items: { doc_id: number; rule: DateRule; title: string }[]) =>
+    call<{ ignored: number }>("POST", "dates/ignore", { items }),
+  datesUnignore: (items: { doc_id: number; rule: DateRule }[]) =>
+    call<{ unignored: number }>("POST", "dates/unignore", { items }),
   fillIgnore: (items: { doc_id: number; title: string }[]) =>
     call<{ ignored: number }>("POST", "fill/ignore", { items }),
   fillUnignore: (doc_ids: number[]) => call<{ unignored: number }>("POST", "fill/unignore", { doc_ids }),

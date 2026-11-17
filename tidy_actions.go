@@ -159,6 +159,12 @@ func (s *tidyService) inventory(ctx context.Context, refresh bool) (*tidyInvento
 	inv.Objects, inv.Findings, inv.MatchingSummary = tidyBuildInventory(objects, docs, allRefs, viewer, tidyFetchUsers(ctx, s.client))
 	inv.Hygiene = tidyBuildHygiene(docs, objects["tags"], s.configRefs(), time.Now())
 	inv.FieldAudit = tidyBuildFieldAudit(docs, objects["custom_fields"])
+	if checks, err := s.dateChecks(ctx, docs); err != nil {
+		inv.Warnings = append(inv.Warnings, "Could not check document dates: "+err.Error())
+	} else {
+		inv.Hygiene = append(inv.Hygiene, tidyDateHygiene(checks)...)
+		inv.Warnings = append(inv.Warnings, checks.Warnings...)
+	}
 	inv.Aliases = []TidyAlias{}
 	if s.db != nil {
 		s.db.Order("id").Find(&inv.Aliases)

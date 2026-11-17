@@ -25,6 +25,7 @@ type fakePaperless struct {
 	mu      sync.Mutex
 	objects map[string]map[int]map[string]any
 	docs    map[int]*tidyDoc
+	trash   []tidyDoc // what GET api/trash lists
 	users   []tidyUser
 	lists   map[string][]map[string]any // workflows, saved_views, mail_rules
 	titles  map[int]string
@@ -210,6 +211,12 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 		res := f.lists[parts[1]]
 		if res == nil {
 			res = []map[string]any{}
+		}
+		writeJSON(w, 200, map[string]any{"next": nil, "results": res})
+	case path == "api/trash" && r.Method == "GET":
+		res := f.trash
+		if res == nil {
+			res = []tidyDoc{}
 		}
 		writeJSON(w, 200, map[string]any{"next": nil, "results": res})
 	case path == "api/documents" && r.Method == "GET":
@@ -421,7 +428,7 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 func newTestTidy(t *testing.T, f *fakePaperless) *tidyService {
 	db, err := InitializeTestDB()
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}, &TidyTitleRun{}, &TidyTitleIgnore{}))
+	require.NoError(t, db.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}, &TidyTitleRun{}, &TidyTitleIgnore{}, &TidyDateIgnore{}, &TidyDateSource{}))
 	return &tidyService{client: f.client(), db: db, writes: true, viewer: "mcp-reader",
 		configRefs: func() tidyConfigRefs {
 			return tidyConfigRefs{TagNames: map[string]string{"paperless-gpt": "AUTO_TAG"}, CustomFieldIDs: map[int]string{}}

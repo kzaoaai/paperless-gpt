@@ -25,7 +25,7 @@ func registerTidy(router *gin.Engine, api *gin.RouterGroup, app *App) {
 		return
 	}
 	if app.Database != nil {
-		if err := app.Database.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}, &TidyTitleRun{}, &TidyTitleIgnore{}); err != nil {
+		if err := app.Database.AutoMigrate(&TidyAction{}, &TidyAlias{}, &TidySplitRun{}, &TidyFillRun{}, &TidyFillIgnore{}, &TidyTitleRun{}, &TidyTitleIgnore{}, &TidyDateIgnore{}, &TidyDateSource{}); err != nil {
 			log.Errorf("Tidy page disabled: migrating its tables failed: %v", err)
 			return
 		}
@@ -403,6 +403,33 @@ func (s *tidyService) routes(g *gin.RouterGroup) {
 			return
 		}
 		n, err := s.unignoreTitles(req.DocIDs)
+		tidyRespond(c, gin.H{"unignored": n}, err)
+	})
+	// Date checks: read-only, with an ignore list of paperless-gpt's own.
+	g.GET("/dates", func(c *gin.Context) {
+		checks, err := s.dateChecks(c.Request.Context(), nil)
+		tidyRespond(c, checks, err)
+	})
+	g.POST("/dates/ignore", func(c *gin.Context) {
+		var req struct {
+			Items []tidyDateIgnoreItem `json:"items"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		n, err := s.ignoreDates(req.Items)
+		tidyRespond(c, gin.H{"ignored": n}, err)
+	})
+	g.POST("/dates/unignore", func(c *gin.Context) {
+		var req struct {
+			Items []tidyDateIgnoreItem `json:"items"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		n, err := s.unignoreDates(req.Items)
 		tidyRespond(c, gin.H{"unignored": n}, err)
 	})
 	g.POST("/titles/apply", func(c *gin.Context) {

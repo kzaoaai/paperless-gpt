@@ -67,6 +67,14 @@ func TestTidyDemoServer(t *testing.T) {
 			OriginalFileName: title + ".pdf"})
 		f.titles[id] = title
 	}
+	// Dates: two pieces split out of document 113 a year and a half later (one
+	// already given its source's date), and a notice dated after it arrived.
+	f.addDoc(tidyDoc{ID: 140, Title: "Paystub - 2017-06-07", OriginalFileName: "113_1-1.pdf", Created: "2017-06-07", Added: "2024-11-17T04:20:26+02:00",
+		Correspondent: ip(31), DocumentType: ip(21), Tags: []int{11}})
+	f.addDoc(tidyDoc{ID: 141, Title: "Paystub - 2017-06-21", OriginalFileName: "113_2-2.pdf", Created: "2017-06-21", Added: "2023-04-01T00:00:00Z",
+		Correspondent: ip(31), DocumentType: ip(21), Tags: []int{11}})
+	f.addDoc(tidyDoc{ID: 142, Title: "Registration renewal notice", Created: "2024-07-08", Added: "2024-04-18T10:00:00+03:00",
+		Correspondent: ip(31), DocumentType: ip(21), Tags: []int{11}})
 	s := newTestTidy(t, f)
 	s.titleSuggest = func(ctx context.Context, id int) (string, string, error) {
 		return f.titles[id], "Example Bank - Statement - " + strconv.Itoa(4000+id) + " - 2023-04", nil

@@ -13,6 +13,7 @@ import ActionLog from "./components/tidy/ActionLog";
 import MergeDialog from "./components/tidy/MergeDialog";
 import SplitDialog from "./components/tidy/SplitDialog";
 import FillDialog from "./components/tidy/FillDialog";
+import DatesDialog from "./components/tidy/DatesDialog";
 import TitlesDialog from "./components/tidy/TitlesDialog";
 import {
   Action,
@@ -73,6 +74,7 @@ const Tidy: React.FC = () => {
   const [splitRow, setSplitRow] = useState<Row | null>(null);
   const [fillOpen, setFillOpen] = useState(false);
   const [titlesOpen, setTitlesOpen] = useState(false);
+  const [datesOpen, setDatesOpen] = useState(false);
   const [renameRow, setRenameRow] = useState<Row | null>(null);
   const [renameTo, setRenameTo] = useState("");
   const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; run: () => Promise<unknown> } | null>(null);
@@ -387,6 +389,19 @@ const Tidy: React.FC = () => {
                   <span className="block text-xs text-muted">{h.label}</span>
                 </>
               );
+              // The date checks have no paperless-ngx list to link to: their tiles open the dialog.
+              if (h.key === "reingest_added" || h.key === "dated_after_arrival") {
+                return (
+                  <button
+                    key={h.key}
+                    type="button"
+                    onClick={() => setDatesOpen(true)}
+                    className="rounded-md border border-line px-3 py-2 text-left hover:bg-surface-2"
+                  >
+                    {body}
+                  </button>
+                );
+              }
               return href && h.count > 0 ? (
                 <a key={h.key} href={href} target="_blank" rel="noreferrer" className="rounded-md border border-line px-3 py-2 hover:bg-surface-2">
                   {body}
@@ -761,6 +776,15 @@ const Tidy: React.FC = () => {
         </>
       )}
 
+      {inv && datesOpen && (
+        <DatesDialog
+          paperlessUrl={paperlessUrl}
+          onClose={(dirty) => {
+            setDatesOpen(false);
+            if (dirty) load(false);
+          }}
+        />
+      )}
       {inv && titlesOpen && (
         <TitlesDialog
           writes={writes}
