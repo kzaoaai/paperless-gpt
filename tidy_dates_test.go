@@ -56,13 +56,23 @@ func TestTidyDateRules(t *testing.T) {
 		{ID: 204, Title: "merged", OriginalFileName: "96_150_merged.pdf", Created: "2024-01-01", Added: "2024-05-01T12:00:00+03:00"},
 		// Its source is gone but was seen on an earlier pass.
 		{ID: 205, Title: "remembered", OriginalFileName: "60_1-1.pdf", Created: "2020-01-01", Added: "2026-11-17T04:20:26+02:00"},
-		// Its source is gone and was never seen: nothing to compare with.
-		{ID: 206, Title: "unknown", OriginalFileName: "61_1-1.pdf", Created: "2020-01-01", Added: "2026-11-17T04:20:26+02:00"},
+		// Its source is gone and was never seen: dated by the next ordinary
+		// document added after the source, which is 96.
+		{ID: 206, Title: "estimated", OriginalFileName: "61_1-1.pdf", Created: "2020-01-01", Added: "2026-11-17T04:20:26+02:00"},
 		// Created dates against the added day, in the server's own offset.
 		{ID: 300, Title: "three days after", Created: "2024-03-13", Added: "2024-03-10T09:00:00+02:00"},
 		{ID: 301, Title: "next day", Created: "2024-03-11", Added: "2024-03-10T23:30:00+02:00"},
 		{ID: 302, Title: "utc date is the day before", Created: "2024-03-10", Added: "2024-03-10T00:30:00+02:00"},
 		{ID: 303, Title: "old paper", Created: "1999-01-01", Added: "2024-03-10T09:00:00+02:00"},
+		// Source 250 is gone, and the document after it (260) is dated before
+		// the one below it (150): the dates around it were rewritten, so no estimate.
+		{ID: 260, Title: "redated", Created: "2019-01-01", Added: "2020-01-01T09:00:00+02:00"},
+		{ID: 270, Title: "no estimate", OriginalFileName: "250_1-1.pdf", Created: "2019-01-01", Added: "2026-11-17T04:20:26+02:00"},
+		// Source 500 is gone and nothing was added between it and its piece.
+		{ID: 501, Title: "next in line", OriginalFileName: "500_edit_0.pdf", Created: "2019-01-01", Added: "2026-11-17T04:20:26+02:00"},
+		// Source 600 is gone; the next document (601) came the same day as the piece.
+		{ID: 601, Title: "same day", Created: "2019-01-01", Added: "2026-11-17T03:00:00+02:00"},
+		{ID: 602, Title: "prompt piece", OriginalFileName: "600_1-1.pdf", Created: "2019-01-01", Added: "2026-11-17T04:20:26+02:00"},
 	}
 	trash := map[int]string{50: "2023-05-01T08:00:00+03:00"}
 	remembered := map[int]string{205: "2023-06-01T08:00:00+03:00"}
@@ -72,7 +82,7 @@ func TestTidyDateRules(t *testing.T) {
 	for _, it := range items {
 		by[it.DocID] = it
 	}
-	assert.Len(t, items, 4)
+	assert.Len(t, items, 5)
 	assert.Equal(t, tidyDateItem{DocID: 200, Title: "late piece", Created: "2017-06-07", Added: "2026-11-17T04:20:26+02:00",
 		Rule: tidyDateReingest, Origin: "split", SourceIDs: []int{96}, SourceAdded: "2023-04-06T11:09:41+03:00", SourceState: "document"}, by[200])
 	assert.Equal(t, "trash", by[203].SourceState)
@@ -80,8 +90,12 @@ func TestTidyDateRules(t *testing.T) {
 	assert.Equal(t, "remembered", by[205].SourceState)
 	assert.Equal(t, tidyDateAfterArrival, by[300].Rule)
 	assert.Equal(t, 3, by[300].Days)
-	assert.Equal(t, []int{206}, unchecked)
+	assert.Equal(t, "estimated", by[206].SourceState)
+	assert.Equal(t, 96, by[206].EstimatedFrom)
+	assert.Equal(t, "2023-04-06T11:09:41+03:00", by[206].SourceAdded)
+	assert.Equal(t, []int{270, 501}, unchecked)
 	// Every piece whose source could be read is remembered, flagged or not.
+	// An estimate is not: it is worked out again each time.
 	assert.Equal(t, map[int]string{
 		200: "2023-04-06T11:09:41+03:00", 201: "2023-04-06T11:09:41+03:00", 202: "2023-04-06T11:09:41+03:00",
 		203: "2023-05-01T08:00:00+03:00", 204: "2024-05-01T10:00:00+03:00",
@@ -89,6 +103,7 @@ func TestTidyDateRules(t *testing.T) {
 
 	script := tidyDateFixScript(items)
 	assert.Contains(t, script, `200: "2023-04-06T11:09:41+03:00",  # split of 96`)
+	assert.Contains(t, script, `206: "2023-04-06T11:09:41+03:00",  # split of 61 (gone; estimated from 96, the next document added)`)
 	assert.Contains(t, script, "bulk_update_documents(list(fix))")
 	assert.NotContains(t, script, "300:")
 	assert.Empty(t, tidyDateFixScript([]tidyDateItem{by[300]}))

@@ -19,9 +19,18 @@ const day = (s: string | undefined) => (s ?? "").slice(0, 10);
 
 const madeFrom = (i: DateItem) => {
   const ids = (i.source_ids ?? []).map((id) => `#${id}`).join(", ");
-  const where = i.source_state === "trash" ? " (in the trash)" : i.source_state === "remembered" ? " (gone since)" : "";
+  const where =
+    i.source_state === "trash"
+      ? " (in the trash)"
+      : i.source_state === "remembered"
+        ? " (gone since)"
+        : i.source_state === "estimated"
+          ? " (gone)"
+          : "";
   return `${i.origin} of ${ids}${where}`;
 };
+
+const estimated = (i: DateItem) => i.source_state === "estimated";
 
 /**
  * Document dates: documents paperless-ngx made by splitting or merging that
@@ -140,7 +149,16 @@ const DatesDialog: React.FC<DatesDialogProps> = ({ paperlessUrl, onClose }) => {
                             <td className="px-2 py-1.5">{i.title}</td>
                             <td className="whitespace-nowrap px-2 py-1.5 tabular-nums">{day(i.added)}</td>
                             <td className="px-2 py-1.5">{madeFrom(i)}</td>
-                            <td className="whitespace-nowrap px-2 py-1.5 tabular-nums">{day(i.source_added)}</td>
+                            <td className="whitespace-nowrap px-2 py-1.5 tabular-nums">
+                              {estimated(i) ? (
+                                <>
+                                  about {day(i.source_added)}{" "}
+                                  <span className="text-xs text-faint">(from #{i.estimated_from})</span>
+                                </>
+                              ) : (
+                                day(i.source_added)
+                              )}
+                            </td>
                             <td className="px-2 py-1 text-right">
                               <Button size="sm" variant="ghost" onClick={() => ignore(i)} disabled={busy}>
                                 Ignore
@@ -151,6 +169,13 @@ const DatesDialog: React.FC<DatesDialogProps> = ({ paperlessUrl, onClose }) => {
                       </tbody>
                     </table>
                   </div>
+                  {reingest.some(estimated) && (
+                    <p className="text-muted">
+                      "About" marks an estimate. The document it was made from is gone and Tidy never saw it, so the
+                      date is that of the next document added after it: paperless-ngx numbers documents in the order
+                      they arrive, so the original arrived no later than that.
+                    </p>
+                  )}
                   <p className="text-muted">
                     paperless-ngx has no field or API call for the added date, so the fix is this script, run in its
                     shell. It gives each listed document the date in "Should be", then refreshes the search index,
@@ -173,7 +198,8 @@ const DatesDialog: React.FC<DatesDialogProps> = ({ paperlessUrl, onClose }) => {
               )}
               {unchecked.length > 0 && (
                 <p className="text-xs text-faint">
-                  Not checked, because the document they were made from no longer exists: {unchecked.join(", ")}.
+                  Not checked, because the document they were made from no longer exists and nothing was added
+                  between it and them to date it by: {unchecked.join(", ")}.
                 </p>
               )}
             </section>

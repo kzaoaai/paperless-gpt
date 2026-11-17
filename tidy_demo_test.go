@@ -68,7 +68,10 @@ func TestTidyDemoServer(t *testing.T) {
 		f.titles[id] = title
 	}
 	// Dates: two pieces split out of document 113 a year and a half later (one
-	// already given its source's date), and a notice dated after it arrived.
+	// already given its source's date), a notice dated after it arrived, and a
+	// piece of document 90, which is gone: its date is estimated from 101's.
+	f.addDoc(tidyDoc{ID: 143, Title: "Lease addendum", OriginalFileName: "90_edit_1.pdf", Created: "2025-12-31", Added: "2026-09-13T04:00:00+03:00",
+		Correspondent: ip(31), DocumentType: ip(21), Tags: []int{11}})
 	f.addDoc(tidyDoc{ID: 140, Title: "Paystub - 2017-06-07", OriginalFileName: "113_1-1.pdf", Created: "2017-06-07", Added: "2024-11-17T04:20:26+02:00",
 		Correspondent: ip(31), DocumentType: ip(21), Tags: []int{11}})
 	f.addDoc(tidyDoc{ID: 141, Title: "Paystub - 2017-06-21", OriginalFileName: "113_2-2.pdf", Created: "2017-06-21", Added: "2023-04-01T00:00:00Z",

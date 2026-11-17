@@ -70,11 +70,14 @@ type tidyDateItem struct {
 	Days int `json:"days,omitempty"`
 	// reingest: how the document was made, from which documents, the added
 	// date it should carry and where that date was read ("document", "trash",
-	// or "remembered" once the source is gone).
-	Origin      string `json:"origin,omitempty"`
-	SourceIDs   []int  `json:"source_ids,omitempty"`
-	SourceAdded string `json:"source_added,omitempty"`
-	SourceState string `json:"source_state,omitempty"`
+	// "remembered" once the source is gone, or "estimated" when the source
+	// was gone before it was ever seen: then the date is that of the next
+	// document added after the source, EstimatedFrom).
+	Origin        string `json:"origin,omitempty"`
+	SourceIDs     []int  `json:"source_ids,omitempty"`
+	SourceAdded   string `json:"source_added,omitempty"`
+	SourceState   string `json:"source_state,omitempty"`
+	EstimatedFrom int    `json:"estimated_from,omitempty"`
 }
 
 type tidyDateIgnored struct {
@@ -88,8 +91,8 @@ type tidyDateIgnored struct {
 type tidyDateChecks struct {
 	Items   []tidyDateItem    `json:"items"`
 	Ignored []tidyDateIgnored `json:"ignored"`
-	// Split or merged documents whose source is gone and was never seen: there
-	// is nothing to compare their added date with.
+	// Split or merged documents whose source is gone, was never seen, and has
+	// no document added between it and them to estimate its date from.
 	Unchecked []int `json:"unchecked"`
 	// FixScript sets `added` on every listed re-ingested document; it is run in
 	// the paperless-ngx shell.
@@ -164,14 +167,48 @@ func tidyDaysAfterArrival(d tidyDoc) int {
 	return int(created.Sub(addedDay).Hours() / 24)
 }
 
+// tidyDatedDoc is a document that was consumed in the ordinary way, with its
+// added date: what a gone source's date is estimated from.
+type tidyDatedDoc struct {
+	id    int
+	added time.Time
+	text  string
+}
+
+// tidyEstimateSourceAdded dates a source that no longer exists. paperless-ngx
+// numbers documents in the order it consumed them, so the source was added no
+// later than the next document after it: plain[i] is the first one above the
+// source. That document must come before the piece, or it says nothing, and
+// must not be dated before the document below the source, which would mean
+// someone rewrote the dates around it. plain is sorted by id.
+func tidyEstimateSourceAdded(plain []tidyDatedDoc, source, piece int) (est tidyDatedDoc, ok bool) {
+	i := sort.Search(len(plain), func(i int) bool { return plain[i].id > source })
+	if i == len(plain) || plain[i].id >= piece {
+		return est, false
+	}
+	if i > 0 && plain[i-1].added.Sub(plain[i].added) > tidyDateReingestSlack {
+		return est, false
+	}
+	return plain[i], true
+}
+
 // tidyBuildDateItems applies both rules to every document. trash maps a
 // trashed document's id to its added date; remembered is what earlier passes
 // saw. remember is what this pass can vouch for, to be stored.
 func tidyBuildDateItems(docs []tidyDoc, trash map[int]string, remembered map[int]string) (items []tidyDateItem, remember map[int]string, unchecked []int) {
 	live := make(map[int]string, len(docs))
+	var plain []tidyDatedDoc
 	for _, d := range docs {
 		live[d.ID] = d.Added
+		// A split or merged piece may carry a corrected date, so it is no
+		// witness for when its neighbours arrived.
+		if origin, _ := tidyReingestOrigin(d); origin == "" {
+			if t, ok := tidyParseAdded(d.Added); ok {
+				plain = append(plain, tidyDatedDoc{id: d.ID, added: t, text: d.Added})
+			}
+		}
 	}
+	sort.Slice(plain, func(i, j int) bool { return plain[i].id < plain[j].id })
 	remember = map[int]string{}
 	for _, d := range docs {
 		if days := tidyDaysAfterArrival(d); days >= tidyDateArrivalMinDays {
@@ -202,6 +239,16 @@ func tidyBuildDateItems(docs []tidyDoc, trash map[int]string, remembered map[int
 				want, wantText, state = t, text, "remembered"
 			}
 		}
+		// No source was ever seen: estimate. Not remembered, since it is
+		// worked out again from whatever documents exist.
+		from := 0
+		if wantText == "" {
+			for _, id := range sources {
+				if est, ok := tidyEstimateSourceAdded(plain, id, d.ID); ok && (wantText == "" || est.added.After(want)) {
+					want, wantText, state, from = est.added, est.text, "estimated", est.id
+				}
+			}
+		}
 		if wantText == "" {
 			unchecked = append(unchecked, d.ID)
 			continue
@@ -211,7 +258,7 @@ func tidyBuildDateItems(docs []tidyDoc, trash map[int]string, remembered map[int
 			continue
 		}
 		items = append(items, tidyDateItem{DocID: d.ID, Title: d.Title, Created: d.Created, Added: d.Added,
-			Rule: tidyDateReingest, Origin: origin, SourceIDs: sources, SourceAdded: wantText, SourceState: state})
+			Rule: tidyDateReingest, Origin: origin, SourceIDs: sources, SourceAdded: wantText, SourceState: state, EstimatedFrom: from})
 	}
 	return items, remember, unchecked
 }
@@ -228,7 +275,11 @@ func tidyDateFixScript(items []tidyDateItem) string {
 		for i, id := range it.SourceIDs {
 			ids[i] = strconv.Itoa(id)
 		}
-		lines = append(lines, fmt.Sprintf("    %d: %q,  # %s of %s", it.DocID, it.SourceAdded, it.Origin, strings.Join(ids, ", ")))
+		note := ""
+		if it.SourceState == "estimated" {
+			note = fmt.Sprintf(" (gone; estimated from %d, the next document added)", it.EstimatedFrom)
+		}
+		lines = append(lines, fmt.Sprintf("    %d: %q,  # %s of %s%s", it.DocID, it.SourceAdded, it.Origin, strings.Join(ids, ", "), note))
 	}
 	if len(lines) == 0 {
 		return ""

@@ -308,7 +308,14 @@ paperless-ngx, no container and no model (its header has the command; skipped un
     same-day split is ordinary intake. The source's date is read from the documents, then from
     `GET /api/trash/` (which ignores `fields` and returns full documents), and is remembered in
     `tidy_date_sources`, because paperless-ngx empties its trash (30 days by default) and the
-    date goes with it. A piece whose source is gone and was never seen is reported as not checked.
+    date goes with it. A source that was gone before Tidy ever saw it is dated by estimate
+    (`tidyEstimateSourceAdded`): paperless-ngx numbers documents in the order it consumed them,
+    so the source arrived no later than the next ordinary document after it, and that document's
+    added date stands in (shown as "about", with the document it came from, and marked in the
+    script). The neighbour must have an id below the piece's, must not be a split or merged piece
+    itself (its date may have been corrected) and must not be dated more than a day before the
+    document below the source (then the dates around it were rewritten). An estimate is not
+    stored. A piece with no such neighbour is reported as not checked.
     `added` cannot be written through the API (`editable=False` on the model), so there is no
     button: the dialog shows a script for the paperless-ngx shell (`tidyDateFixScript`: an ORM
     `update` of `added`, then `bulk_update_documents`, which refreshes the index and runs

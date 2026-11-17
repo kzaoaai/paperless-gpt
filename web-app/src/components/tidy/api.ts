@@ -256,8 +256,13 @@ export interface DateItem {
   origin?: string;
   source_ids?: number[];
   source_added?: string;
-  /** where that date was read: document, trash, or remembered once the source is gone */
+  /**
+   * where that date was read: document, trash, remembered once the source is gone, or
+   * estimated when the source was gone before it was seen (then it is the added date of
+   * estimated_from, the next document added after the source)
+   */
   source_state?: string;
+  estimated_from?: number;
 }
 
 export interface DateIgnored {
@@ -274,7 +279,7 @@ export interface DateIgnored {
 export interface DateChecks {
   items: DateItem[];
   ignored: DateIgnored[];
-  /** split or merged documents whose source is gone and was never seen */
+  /** split or merged documents whose source is gone, was never seen and cannot be dated */
   unchecked: number[];
   fix_script?: string;
   warnings: string[];
