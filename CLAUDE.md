@@ -328,10 +328,12 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   the ignored list says when a document has been fixed since. Checked on the demo server
   (2026-11-17): both tables, the script, Ignore and the tile count after closing; Un-ignore
   only in the Go test. In production (deployed 2026-11-17) the endpoint lists no split or merged
-  piece and 14 documents dated after arrival, the same 14 a direct database query gave. Three
-  pieces of "edit PDF into new documents" are reported as not checked: their sources had left
-  the trash before Tidy first ran, and one of them was made eight months after its source (going
-  by the added dates of the neighbouring ids), so a gone source hides a real case.
+  piece from a source it could read and 14 documents dated after arrival, the same 14 a direct
+  database query gave. Three pieces of "edit PDF into new documents" had sources that left the
+  trash before Tidy first ran. With the estimate (deployed the same day) one is listed, made
+  230 days after the document that followed its source; one is not, made 13 hours after; one
+  stays not checked, with nothing added between its source and it. All three outcomes match a
+  direct database query.
 - bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
   Document Updated workflows run on them; the merge preview lists the enabled ones.
 - Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes
@@ -369,8 +371,9 @@ paperless-ngx, no container and no model (its header has the command; skipped un
 
 ### Open items
 
-- Production runs `e2933e9` (deployed 2026-11-17: the date checks; rollback image
-  `:cf4ebfaedfdc9ddcfe1b7717551e82d572d064df`; earlier builds `cf4ebfa` (new correspondents and
+- Production runs `ba87321` (deployed 2026-11-17: the date checks' estimate for a gone source;
+  rollback image `:e2933e9ec8a251a4f082bd0c7d910c4c0594d40f`; earlier builds `e2933e9` (the date
+  checks), `cf4ebfa` (new correspondents and
   tags get the viewer's view grant), `f15b944` (Fill and Split show current titles), `7c49471`, `d352785`, `b12aebd`,
   `c34e365`, `62659dd`, `341b7f2`, `c846093`, `db9990f`,
   `262c118`, `7ee17ad`, `20b4767`, `6c44ced`, `03162b2`, `59b98de`, `1d87a5a`), with
