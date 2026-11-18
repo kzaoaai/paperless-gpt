@@ -98,7 +98,13 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     `ocr.NewGenAIClient` (`ocr/google_ai_client.go`); upstream edits to either provider's
     `genai.NewClient` call will conflict here. The three variables are in `env_registry.go` and
     the README table. Tests: `TestGenAIClientConfig`. Offered upstream as
-    icereed/paperless-gpt#1225 (open); once it merges, take upstream's version and drop this item.
+    icereed/paperless-gpt#1225 (open); once it merges, take upstream's version and drop this item,
+    but keep the pin below unless upstream has its own.
+    The API-key backend (`gemini`) pins the Gemini API to `v1beta` (`geminiAPIVersion`, same
+    file): from `google.golang.org/genai` v1.78.0 an API-key client defaults to `v1`, where
+    preview models such as `gemini-3-flash-preview` return an error. `go.mod` is on v1.39.0, so
+    the pin changes nothing until the SDK is bumped, and Vertex is not affected. The pin is not
+    part of #1225 and has not been exercised with a live API-key call.
   - `GOOGLEAI_THINKING_LEVEL` (`minimal`/`low`/`medium`/`high`) sets Gemini 3's thinking level
     for the googleai LLM provider (`thinkingConfig`, `app_llm_googleai.go`); it overrides
     `GOOGLEAI_THINKING_BUDGET`, since the API rejects both. Upstream has only the budget. The
