@@ -184,10 +184,14 @@ replaces the document instead of becoming a version (`replace_scan.go`, tests
 
 - Who qualifies (`replaceEligibility`): a root PDF added within `AUTO_OCR_REPLACE_MAX_AGE`
   (default 168h) with no notes, ASN, custom fields or versions, that no document-link field
-  points at (`custom_field_query` `contains`), with no open replacement, whose PDF does not
+  points at (`custom_field_query` `contains`), with no replacement record other than a refused
+  one (so a replaced scan restored from the trash is not replaced again), whose PDF does not
   already carry this program's layer (`hasSearchableLayer`, checked whatever
   `PDF_SKIP_EXISTING_OCR` says, so a replacement can never be replaced again). Anything that
-  cannot be checked counts as no. Everything else, and every manual OCR job, keeps version mode.
+  cannot be checked counts as no. Everything else, and every manual OCR job, keeps version mode;
+  the reason is logged at warn, so it shows under production's `LOG_LEVEL=warn`. No production
+  workflow or mail rule sets a custom field at consume (checked 2026-11-18), so the custom-field
+  rule only keeps out documents added with hand-set fields.
 - `ProcessDocumentOCR` builds the PDF with every guard as before and, instead of uploading,
   returns `pdfActionReplaceReady`; no searchable PDF (kept, skipped, page limit) means nothing
   is replaced. `replaceScan` then: records the replacement (`ocr_replacements`, state
@@ -210,11 +214,26 @@ replaces the document instead of becoming a version (`replace_scan.go`, tests
   `uploading` (stopped mid-upload) marks the scan failed instead of uploading again.
 - The OCR run stays under the scan's id with `upload_mode` `replace`; its detail names the
   replacement. A replacement's `added` is its own consume time, seconds after the scan's.
-- Verified only in the Go tests (16 mutations of the guards, the skip set, the hand-over and
-  its read-back, the give-up and the late mark, each killed by a test). The PATCH shape
-  (`owner: null` with `set_permissions` and `tags` in one request) and `created` on
-  `post_document` have not met a real paperless-ngx; the task reply, `full_perms` shape,
-  `versions` list and the link query were read from production.
+- Go tests: 17 mutations of the guards, the skip set, the hand-over and its read-back, the
+  give-up, the late mark and the restore guard, each killed by a test.
+- End to end 2026-11-18 against a throwaway paperless-ngx 3.5.1 (production's registry digest,
+  OCR mode `auto`, replicas of workflows 5, 6 and 8, a document-link field), Document AI stubbed
+  (`replace_e2e_test.go`, skipped unless `REPLACE_E2E_URL` is set; one auto-OCR cycle per run,
+  state in a sqlite file): a consume-folder scan (no owner, the viewer's grant, `Inbox`, matched
+  tag and correspondent) was replaced in 5 s; the one PATCH with `owner: null`,
+  `set_permissions`, `tags`, `content` and `created` was kept as sent; the replacement had the
+  recognized text as content and in full-text search, the scan's tags with `Inbox` swapped for
+  `OCR-auto-done`, no owner, the grant, the scan's correspondent, title, created date and file
+  name, no versions; its own consume had re-run matching and the routing workflows, which the
+  hand-over overwrote; the scan was in the trash; the next cycle made no Document AI call. With
+  paperless-ngx's worker stopped, the upload stayed unconsumed: the scan stayed untouched in the
+  queue (run `attached`); after the worker came back, the next cycle finished it with no second
+  upload or Document AI call. The first scan restored from the trash got a version, not a second
+  replacement. Not exercised there: Document AI, the LLM stage, a refused upload (3.5.1 consumes a
+  duplicate; the refusal path is Go-tested only), the one-hour give-up and the late mark, a
+  failed hand-over PATCH or delete. The test instance generated archive files
+  (`ARCHIVE_FILE_GENERATION` unset), unlike production; the replacement's original file carried
+  the recognized text layer.
 
 ### Tidy page (fork-only, `/tidy`)
 
