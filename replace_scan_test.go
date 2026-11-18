@@ -88,6 +88,7 @@ type replaceFake struct {
 	patchFailures  map[int]int
 	deleteFailures map[int]int
 	links          map[int]int
+	ignoreFields   map[string]bool // PATCH fields answered 200 but not stored
 
 	uploads        []fakeUpload
 	versionUploads int
@@ -101,7 +102,7 @@ func newReplaceFake(t *testing.T) *replaceFake {
 	require.NoError(t, err)
 	f := &replaceFake{
 		t: t, docs: map[int]*fakeDoc{}, nextID: 500, tasks: map[string]*replaceTask{}, scan: scan,
-		consume: "success", patchFailures: map[int]int{}, deleteFailures: map[int]int{}, links: map[int]int{},
+		consume: "success", patchFailures: map[int]int{}, deleteFailures: map[int]int{}, links: map[int]int{}, ignoreFields: map[string]bool{},
 		patches: map[int][]map[string]interface{}{},
 	}
 	f.server = httptest.NewServer(http.HandlerFunc(f.serve))
@@ -346,6 +347,9 @@ func (f *replaceFake) consumeUpload(up fakeUpload) int {
 
 func (f *replaceFake) applyPatch(d *fakeDoc, body map[string]interface{}) {
 	for k, v := range body {
+		if f.ignoreFields[k] {
+			continue
+		}
 		switch k {
 		case "content":
 			d.Content = strings.TrimSpace(v.(string)) // DRF trims
@@ -653,6 +657,28 @@ func TestReplaceRefusedLaterCompletesTheScan(t *testing.T) {
 	assert.Equal(t, replaceRejected, rec.State)
 	assert.Empty(t, rec.Text)
 	assert.Equal(t, 1, e.provider.calls)
+}
+
+// An update paperless-ngx answers with 200 but does not keep (here the owner)
+// is caught by reading the replacement back: the scan is not deleted.
+func TestReplaceHandOverNotKeptKeepsTheScan(t *testing.T) {
+	e := newReplaceEnv(t)
+	e.fake.addScan(100)
+	e.fake.ignoreFields["owner"] = true
+
+	e.cycle(t)
+
+	assert.False(t, e.fake.docs[100].Deleted)
+	rec := e.record(t, 100)
+	assert.Equal(t, replaceConsumed, rec.State)
+	assert.Contains(t, rec.Detail, "owner")
+	assert.Contains(t, e.run(t, 100).PDFDetail, "did not keep")
+
+	e.fake.ignoreFields["owner"] = false
+	e.cycle(t)
+
+	assert.True(t, e.fake.docs[100].Deleted)
+	assert.Nil(t, e.replacement(t).Owner)
 }
 
 func TestReplaceDeleteFailureIsRetried(t *testing.T) {
