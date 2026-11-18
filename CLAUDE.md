@@ -114,6 +114,14 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
     `-r2`, which upstream still pins, so its `apk add` fails and no image builds. On a conflict,
     take whichever version the current Alpine repo serves; when upstream's Renovate catches up,
     take theirs and drop this item. Offered upstream as icereed/paperless-gpt#1224 (open).
+  - Replace mode for new scans (below) is fork-only, in `replace_scan.go`, and touches upstream
+    files in exactly these places: `ProcessDocumentOCR`'s option check and upload switch
+    (`PDFUploadModeReplace`, `pdfActionReplaceReady`, `ocr.go`), `processAutoOcrTagDocuments`
+    (`resumeReplacements` and the skip set at the top, `replaceEligibility` after the options,
+    `replaceScan` after OCR, the "Not updating the scan" branch; `background.go`), two lines in
+    `main.go`, two `AUTO_OCR_REPLACE*` entries in `env_registry.go` and the README, and the
+    `upload_mode` type and label in `web-app/src/components/ocr/api.ts`. Upstream edits to the
+    auto-OCR loop will conflict here.
   - The Tidy page (below) is fork-only and touches upstream files in exactly these places:
     `registerTidy(router, api, app)` in `main.go`, the `tidyApplyAliases` line in
     `UpdateDocuments` (`paperless.go`), two `TIDY_*` entries in `env_registry.go`, and the
@@ -127,7 +135,9 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 - `PDF_UPLOAD=true` with `PDF_UPLOAD_MODE=version`, `PDF_REPLACE=false`: the Document AI
   searchable PDF becomes a new version of the same document. Never switch to `new` mode:
   it uploads a second document, and with replace it deletes the original along with its
-  custom fields, document type, storage path and ASN.
+  custom fields, document type, storage path and ASN. `PDF_REPLACE` stays false with replace
+  mode too: that mode is the separate `AUTO_OCR_REPLACE` (below), which needs version mode
+  for everything it does not replace, and refuses to start with `PDF_REPLACE=true`.
 - The text layer is drawn with ocrchestra's `pdfocr.UnicodeFont` (`textLayerFont`,
   `textlayer.go`), from the kzaoaai/ocrchestra fork (`replace` in `go.mod`). Upstream's
   default core font encodes only Latin-1 and turns Arabic into mojibake, which paperless
@@ -164,6 +174,47 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
   out. `gemini-2.5-flash` and `2.5-flash-lite` return 404 on Vertex for this project. Flash-Lite
   models were measured worse (wrong created dates, invented amounts, wrong tags), so they are not
   a cost saving worth taking.
+
+### Replace mode for new scans (fork-only, `AUTO_OCR_REPLACE`)
+
+Built 2026-11-18 (AA's decision: a version should mean someone added one on purpose); **not
+deployed, production does not set it**. In the auto-OCR queue a new scan's searchable PDF
+replaces the document instead of becoming a version (`replace_scan.go`, tests
+`replace_scan_test.go` against a stateful fake paperless-ngx 3.4):
+
+- Who qualifies (`replaceEligibility`): a root PDF added within `AUTO_OCR_REPLACE_MAX_AGE`
+  (default 168h) with no notes, ASN, custom fields or versions, that no document-link field
+  points at (`custom_field_query` `contains`), with no open replacement, whose PDF does not
+  already carry this program's layer (`hasSearchableLayer`, checked whatever
+  `PDF_SKIP_EXISTING_OCR` says, so a replacement can never be replaced again). Anything that
+  cannot be checked counts as no. Everything else, and every manual OCR job, keeps version mode.
+- `ProcessDocumentOCR` builds the PDF with every guard as before and, instead of uploading,
+  returns `pdfActionReplaceReady`; no searchable PDF (kept, skipped, page limit) means nothing
+  is replaced. `replaceScan` then: records the replacement (`ocr_replacements`, state
+  `uploading`) with the recognized text, uploads the PDF under the scan's own file name with
+  its title and created date, waits up to `taskPollAttempts` for the consume task (paperless-ngx
+  3.4 names the new document in `result_data.document_id` / `related_document_ids`), hands
+  over (one PATCH of the replacement: content = recognized text, title, created,
+  correspondent, type, storage path, owner, `set_permissions`, and the scan's tags with
+  `AUTO_OCR_TAG` swapped for `PDF_OCR_COMPLETE_TAG`), reads the replacement back and compares,
+  and only then deletes the scan (paperless-ngx's trash). The scan itself is never updated, so
+  the LLM stage runs once, on the replacement. The replacement's own consume re-runs matching
+  and workflows 5, 6 and 8; the hand-over overwrites what they set.
+- Failure paths: a refused upload or consume falls back to a version (`versionInstead`); a
+  consume not confirmed in the wait, a failed hand-over or a failed delete leaves the scan in
+  the queue untouched, and `resumeReplacements` (start of every auto-OCR cycle) carries on from
+  the record without a second upload or OCR call. Scans with an open replacement and every
+  replacement paperless-gpt uploaded are skipped by the cycle. Unconfirmed for over an hour
+  (`replacePendingLimit`): the scan gets `FAIL_TAG` and a `gave_up` record; the task is still
+  watched for 7 days and a replacement that arrives late is marked failed too. A record left
+  `uploading` (stopped mid-upload) marks the scan failed instead of uploading again.
+- The OCR run stays under the scan's id with `upload_mode` `replace`; its detail names the
+  replacement. A replacement's `added` is its own consume time, seconds after the scan's.
+- Verified only in the Go tests (16 mutations of the guards, the skip set, the hand-over and
+  its read-back, the give-up and the late mark, each killed by a test). The PATCH shape
+  (`owner: null` with `set_permissions` and `tags` in one request) and `created` on
+  `post_document` have not met a real paperless-ngx; the task reply, `full_perms` shape,
+  `versions` list and the link query were read from production.
 
 ### Tidy page (fork-only, `/tidy`)
 

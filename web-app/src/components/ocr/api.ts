@@ -36,7 +36,8 @@ export interface OCRRun {
   limit_pages: number;
   process_mode: string;
   upload_pdf: boolean;
-  upload_mode?: "new" | "version";
+  // "replace" (fork): the auto queue replaced a new scan with its searchable PDF.
+  upload_mode?: "new" | "version" | "replace";
   replace_original: boolean;
   copy_metadata: boolean;
   prompt_overridden: boolean;
@@ -196,7 +197,9 @@ export function formatRunOptions(run: OCRRun): string {
     parts.push(
       run.upload_mode === "version" || run.pdf_action === "versioned"
         ? "PDF as new version"
-        : run.replace_original
+        : run.upload_mode === "replace"
+          ? "PDF replaces the new scan"
+          : run.replace_original
           ? "PDF replaces original"
           : "PDF attached",
     );
