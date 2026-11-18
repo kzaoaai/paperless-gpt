@@ -931,6 +931,9 @@ func validateOrDefaultEnvVars() {
 		log.Warnf("PDF_REPLACE is ignored when PDF_UPLOAD_MODE=%s: versions never delete anything", PDFUploadModeVersion)
 		pdfReplace = false
 	}
+	if err := loadAutoOCRReplaceConfig(); err != nil { // fork: replace_scan.go
+		log.Fatal(err)
+	}
 
 	if ocrProcessMode == "" {
 		ocrProcessMode = "image"
@@ -1037,6 +1040,9 @@ func validateOrDefaultEnvVars() {
 		}
 		if pdfReplace {
 			log.Infof("Original documents will be replaced after OCR upload")
+		}
+		if autoOCRReplace {
+			log.Infof("Auto-OCR replaces new scans with their searchable PDF (documents added within %s, without notes, ASN, custom fields, versions or links); everything else gets a new version", autoOCRReplaceMaxAge)
 		}
 		if pdfCopyMetadata {
 			log.Infof("Metadata will be copied from original documents")

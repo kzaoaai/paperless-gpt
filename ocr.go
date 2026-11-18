@@ -72,6 +72,9 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 	if options.UploadMode == PDFUploadModeVersion && options.ReplaceOriginal {
 		return nil, fmt.Errorf("invalid OCROptions: cannot set ReplaceOriginal=true when UploadMode=%s", PDFUploadModeVersion)
 	}
+	if options.UploadMode == PDFUploadModeReplace && (options.ReplaceOriginal || !options.UploadPDF) {
+		return nil, fmt.Errorf("invalid OCROptions: UploadMode=%s needs UploadPDF=true and ReplaceOriginal=false", PDFUploadModeReplace)
+	}
 
 	docLogger := documentLogger(documentID)
 	if jobID != "" {
@@ -601,8 +604,19 @@ func (app *App) ProcessDocumentOCR(ctx context.Context, documentID int, options 
 								}
 							}
 
+							// Replace mode (fork, replace_scan.go): the auto-OCR loop uploads
+							// the PDF itself. A PDF that already carries this program's
+							// layer is never replaced again; it gets a version as before.
+							if options.UploadPDF && pdfData != nil && options.UploadMode == PDFUploadModeReplace {
+								if hasSearchableLayer(originalPDFData) {
+									options.UploadMode = PDFUploadModeVersion
+								} else {
+									processedDoc.PDFAction = pdfActionReplaceReady
+								}
+							}
+
 							// Upload PDF to paperless-ngx if requested
-							if options.UploadPDF && pdfData != nil {
+							if options.UploadPDF && pdfData != nil && options.UploadMode != PDFUploadModeReplace {
 								err := app.uploadProcessedPDF(ctx, documentID, pdfData, options, docLogger)
 								var replaceErr *replaceAfterUploadError
 								var unconfirmedErr *versionUnconfirmedError

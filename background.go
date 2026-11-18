@@ -511,6 +511,17 @@ func (app *App) runWorkflowDocumentOCR(ctx context.Context, document Document, w
 
 // processAutoOcrTagDocuments handles the background auto-tagging of OCR documents
 func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
+	// Replace mode (fork, replace_scan.go): finish replacements a previous
+	// cycle left open, and leave their scans and replacements alone below.
+	var skip map[int]bool
+	successCount := 0
+	var errs []error
+	if autoOCRReplace {
+		var resumed int
+		skip, resumed, errs = app.resumeReplacements(ctx)
+		successCount += resumed
+	}
+
 	documents, err := app.Client.GetDocumentsByTag(ctx, autoOcrTag, 25)
 	if err != nil {
 		return 0, fmt.Errorf("error fetching documents with autoOcrTag: %w", err)
@@ -518,16 +529,20 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 
 	if len(documents) == 0 {
 		log.Debugf("No documents with tag %s found", autoOcrTag)
-		return 0, nil
+		if len(errs) > 0 {
+			return successCount, fmt.Errorf("one or more errors occurred: %w", errors.Join(errs...))
+		}
+		return successCount, nil
 	}
 
 	log.Debugf("Found %d documents with tag %s", len(documents), autoOcrTag)
 
-	successCount := 0
-	var errs []error
-
 	for _, document := range documents {
 		docLogger := documentLogger(document.ID)
+		if skip[document.ID] {
+			docLogger.Debug("Skipping document: it is part of an open replacement")
+			continue
+		}
 		docLogger.Info("Processing document for OCR")
 
 		// Skip OCR if the document already has the OCR complete tag and tagging is enabled
@@ -567,6 +582,13 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 
 		options := app.effectiveOCRDefaults()
 		options.ExistingContent = document.Content
+		if autoOCRReplace && options.UploadPDF && options.UploadMode == PDFUploadModeVersion && !options.ReplaceOriginal {
+			if ok, why := app.replaceEligibility(ctx, document.ID); ok {
+				options.UploadMode = PDFUploadModeReplace
+			} else {
+				docLogger.Infof("Not a new scan to replace (%s); a searchable PDF is added as a new version", why)
+			}
+		}
 
 		// Every auto run is tracked exactly like a manual one: registered in
 		// the in-memory job store (live progress) and persisted as an OCR Run
@@ -649,6 +671,10 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 			finishOCRRunLogged(app, jobID, "completed", "", pagesDone, totalPages, "none", "Skipped (already processed)")
 			continue
 		}
+		replaced := replaceFellBack
+		if processedDoc.PDFAction == pdfActionReplaceReady {
+			replaced = app.replaceScan(ctx, document, processedDoc, jobID, docLogger)
+		}
 		jobStore.updateJobStatus(jobID, "completed", processedDoc.Text)
 		finishOCRRunLogged(app, jobID, "completed", "", pagesDone, totalPages, processedDoc.PDFAction, processedDoc.PDFDetail)
 		if err := PruneOCRRuns(app.Database, document.ID); err != nil {
@@ -698,7 +724,11 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 
 		// Skip updating the original document if it was actually replaced (deleted) during OCR.
 		// The replacement document will be processed as a new document on the next cycle.
-		if options.ReplaceOriginal && processedDoc != nil && processedDoc.ReplacedOriginal {
+		// In replace mode the replacement already carries the text and tags, and
+		// an open replacement leaves the scan in the queue untouched.
+		if replaced != replaceFellBack {
+			docLogger.Infof("Not updating the scan: its replacement is %s", map[replaceOutcome]string{replaceFinished: "done", replaceOpen: "not finished yet"}[replaced])
+		} else if options.ReplaceOriginal && processedDoc != nil && processedDoc.ReplacedOriginal {
 			docLogger.Info("Skipping tag update for replaced document (original was deleted)")
 		} else {
 			err = app.Client.UpdateDocuments(ctx, []DocumentSuggestion{
