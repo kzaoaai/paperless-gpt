@@ -239,6 +239,7 @@ func TestGenAIClientConfig(t *testing.T) {
 		assert.Equal(t, genai.BackendGeminiAPI, cfg.Backend)
 		assert.Equal(t, "key", cfg.APIKey)
 		assert.Empty(t, cfg.Project, "project and API key are mutually exclusive in genai")
+		assert.Equal(t, "v1beta", cfg.HTTPOptions.APIVersion, "preview models are not served on v1")
 	})
 	t.Run("gemini needs a key", func(t *testing.T) {
 		_, err := genAIClientConfig("", "gemini", "", "")
@@ -251,6 +252,7 @@ func TestGenAIClientConfig(t *testing.T) {
 		assert.Empty(t, cfg.APIKey)
 		assert.Equal(t, "proj", cfg.Project)
 		assert.Equal(t, "global", cfg.Location)
+		assert.Empty(t, cfg.HTTPOptions.APIVersion, "the pin is for the API-key backend only")
 	})
 	t.Run("vertex keeps an explicit location", func(t *testing.T) {
 		cfg, err := genAIClientConfig("", "vertex", "proj", "us-central1")

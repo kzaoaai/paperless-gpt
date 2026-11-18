@@ -24,6 +24,9 @@ type GoogleAIProvider struct {
 // Vertex does not accept.
 const defaultVertexLocation = "global"
 
+// geminiAPIVersion is the Gemini API version the API-key backend calls.
+const geminiAPIVersion = "v1beta"
+
 // genAIClientConfig builds the genai client config for the selected backend.
 // "gemini" (or empty) uses the Gemini API with an API key; "vertex" uses Vertex
 // AI with Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS),
@@ -34,9 +37,12 @@ func genAIClientConfig(apiKey, backend, project, location string) (*genai.Client
 		if apiKey == "" {
 			return nil, fmt.Errorf("GOOGLEAI_API_KEY environment variable is not set")
 		}
+		// Pinned: from genai v1.78.0 an API-key client defaults to the v1 API,
+		// where preview models such as gemini-3-flash-preview return an error.
 		return &genai.ClientConfig{
-			APIKey:  apiKey,
-			Backend: genai.BackendGeminiAPI,
+			APIKey:      apiKey,
+			Backend:     genai.BackendGeminiAPI,
+			HTTPOptions: genai.HTTPOptions{APIVersion: geminiAPIVersion},
 		}, nil
 	case "vertex":
 		if project == "" {
