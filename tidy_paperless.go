@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // tidyKinds are the paperless-ngx object types the Tidy page manages, by their
@@ -312,9 +314,14 @@ func tidyJoinInts(ids []int) string {
 	return strings.Join(parts, ",")
 }
 
-// tidyBulkEdit runs one documents/bulk_edit method over ids, in chunks.
-// paperless-ngx sends Document Updated for every affected document, so its
-// Document Updated workflows run on them.
+// tidyBulkEdit runs one documents/bulk_edit method over ids, in chunks, and
+// returns once paperless-ngx has applied it. paperless-ngx sends Document
+// Updated for every affected document, so its Document Updated workflows run
+// on them.
+//
+// Up to paperless-ngx 3.4 the edit ran inside the request. From 3.5 the
+// request only queues it and answers with a task_id, so each chunk waits for
+// that task: every caller reads the documents back straight afterwards.
 func tidyBulkEdit(ctx context.Context, c tidyHTTP, ids []int, method string, params map[string]any) error {
 	for start := 0; start < len(ids); start += 500 {
 		end := start + 500
@@ -322,11 +329,73 @@ func tidyBulkEdit(ctx context.Context, c tidyHTTP, ids []int, method string, par
 			end = len(ids)
 		}
 		body := map[string]any{"documents": ids[start:end], "method": method, "parameters": params}
-		if err := tidySend(ctx, c, "POST", "api/documents/bulk_edit/", body, nil); err != nil {
+		var ans struct {
+			TaskID string `json:"task_id"`
+		}
+		if err := tidySend(ctx, c, "POST", "api/documents/bulk_edit/", body, &ans); err != nil {
 			return err
+		}
+		if ans.TaskID == "" {
+			continue
+		}
+		if err := tidyWaitTask(ctx, c, ans.TaskID); err != nil {
+			return fmt.Errorf("bulk edit %s: %w", method, err)
 		}
 	}
 	return nil
+}
+
+// How long tidyWaitTask waits for one queued bulk edit, and how often it
+// asks. Variables so tests can shorten them.
+var (
+	tidyTaskWait     = 3 * time.Minute
+	tidyTaskPollMin  = 200 * time.Millisecond
+	tidyTaskPollMax  = 2 * time.Second
+	errTidyTaskStuck = errors.New("paperless-ngx has not finished it")
+)
+
+// tidyWaitTask polls a queued paperless-ngx task until it succeeds. A failed
+// or revoked task is an error carrying the task's own detail. A task still
+// unfinished when the wait ends is an error too (errTidyTaskStuck): the edit
+// may yet land, so the caller must not act as if it had or had not.
+func tidyWaitTask(ctx context.Context, c tidyHTTP, taskID string) error {
+	deadline := time.Now().Add(tidyTaskWait)
+	wait := tidyTaskPollMin
+	state := "pending"
+	for {
+		var raw any
+		err := tidySend(ctx, c, "GET", "api/tasks/?task_id="+url.QueryEscape(taskID), nil, &raw)
+		if err == nil {
+			// Not listed yet reads as still pending.
+			if task, terr := taskFromTasksResponse(raw, taskID); terr == nil {
+				status, _ := task["status"].(string)
+				switch strings.ToLower(status) {
+				case "success":
+					return nil
+				case "failure", "revoked":
+					return fmt.Errorf("paperless-ngx task %s ended as %s: %v", taskID, strings.ToLower(status), taskResultDetail(task))
+				case "":
+				default:
+					state = strings.ToLower(status)
+				}
+			}
+		} else if ctx.Err() != nil {
+			return ctx.Err()
+		} else {
+			state = "status unavailable: " + err.Error()
+		}
+		if !time.Now().Add(wait).Before(deadline) {
+			return fmt.Errorf("%w after %s (task %s, %s); the edit may still be applied", errTidyTaskStuck, tidyTaskWait, taskID, state)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+		if wait *= 2; wait > tidyTaskPollMax {
+			wait = tidyTaskPollMax
+		}
+	}
 }
 
 // tidySetDocRef points documents at object id of a single-valued kind.

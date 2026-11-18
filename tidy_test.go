@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,11 +33,28 @@ type fakePaperless struct {
 	nextID  int
 	writes  []string
 	srv     *httptest.Server
+
+	// asyncBulk makes documents/bulk_edit behave as paperless-ngx 3.5 does:
+	// the request queues the edit and returns a task_id, and the edit lands
+	// only once that task has been asked about taskPolls times. taskFails,
+	// when set, ends the task as a failure with that detail instead;
+	// taskNeverEnds leaves it pending.
+	asyncBulk     bool
+	taskPolls     int
+	taskFails     string
+	taskNeverEnds bool
+	tasks         map[string]*fakeTask
+}
+
+type fakeTask struct {
+	status string
+	polls  int
+	body   map[string]any
 }
 
 func newFakePaperless(t *testing.T) *fakePaperless {
 	f := &fakePaperless{t: t, objects: map[string]map[int]map[string]any{}, docs: map[int]*tidyDoc{},
-		lists: map[string][]map[string]any{}, titles: map[int]string{}, nextID: 1000}
+		lists: map[string][]map[string]any{}, titles: map[int]string{}, nextID: 1000, tasks: map[string]*fakeTask{}}
 	for _, k := range tidyKinds {
 		f.objects[k] = map[int]map[string]any{}
 	}
@@ -180,6 +198,55 @@ func containsInt(list []int, n int) bool {
 	return false
 }
 
+// applyBulkEdit applies one documents/bulk_edit request body to the documents.
+func (f *fakePaperless) applyBulkEdit(body map[string]any) {
+	params := body["parameters"].(map[string]any)
+	ids := toInts(body["documents"])
+	switch body["method"] {
+	case "set_correspondent", "set_document_type", "set_storage_path":
+		field := strings.TrimPrefix(body["method"].(string), "set_")
+		var ref *int
+		if v, ok := params[field].(float64); ok {
+			ref = ip(int(v))
+		}
+		for _, did := range ids {
+			d := f.docs[did]
+			switch field {
+			case "correspondent":
+				d.Correspondent = ref
+			case "document_type":
+				d.DocumentType = ref
+			case "storage_path":
+				d.StoragePath = ref
+			}
+		}
+	case "modify_tags":
+		add, remove := toInts(params["add_tags"]), toInts(params["remove_tags"])
+		var expRemove []int
+		for _, t := range remove {
+			expRemove = append(expRemove, t)
+			expRemove = append(expRemove, f.descendants(t)...)
+		}
+		var expAdd []int
+		for _, t := range add {
+			expAdd = append(expAdd, t)
+			expAdd = append(expAdd, f.ancestors(t)...)
+		}
+		for _, did := range ids {
+			d := f.docs[did]
+			var kept []int
+			for _, t := range d.Tags {
+				if !containsInt(expRemove, t) {
+					kept = append(kept, t)
+				}
+			}
+			d.Tags = tidyUniqueSorted(append(kept, expAdd...))
+		}
+	default:
+		f.t.Fatalf("unexpected bulk_edit method %v", body["method"])
+	}
+}
+
 func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -253,52 +320,38 @@ func (f *fakePaperless) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, map[string]any{"next": next, "results": res})
 	case path == "api/documents/bulk_edit":
-		params := body["parameters"].(map[string]any)
-		ids := toInts(body["documents"])
-		switch body["method"] {
-		case "set_correspondent", "set_document_type", "set_storage_path":
-			field := strings.TrimPrefix(body["method"].(string), "set_")
-			var ref *int
-			if v, ok := params[field].(float64); ok {
-				ref = ip(int(v))
-			}
-			for _, did := range ids {
-				d := f.docs[did]
-				switch field {
-				case "correspondent":
-					d.Correspondent = ref
-				case "document_type":
-					d.DocumentType = ref
-				case "storage_path":
-					d.StoragePath = ref
-				}
-			}
-		case "modify_tags":
-			add, remove := toInts(params["add_tags"]), toInts(params["remove_tags"])
-			var expRemove []int
-			for _, t := range remove {
-				expRemove = append(expRemove, t)
-				expRemove = append(expRemove, f.descendants(t)...)
-			}
-			var expAdd []int
-			for _, t := range add {
-				expAdd = append(expAdd, t)
-				expAdd = append(expAdd, f.ancestors(t)...)
-			}
-			for _, did := range ids {
-				d := f.docs[did]
-				var kept []int
-				for _, t := range d.Tags {
-					if !containsInt(expRemove, t) {
-						kept = append(kept, t)
-					}
-				}
-				d.Tags = tidyUniqueSorted(append(kept, expAdd...))
-			}
-		default:
-			f.t.Fatalf("unexpected bulk_edit method %v", body["method"])
+		if f.asyncBulk {
+			// paperless-ngx 3.5: queue the edit and answer with a task.
+			id := "task-" + strconv.Itoa(len(f.tasks)+1)
+			f.tasks[id] = &fakeTask{status: "pending", polls: f.taskPolls, body: body}
+			writeJSON(w, 200, map[string]any{"result": "OK", "task_id": id})
+			return
 		}
+		f.applyBulkEdit(body)
 		writeJSON(w, 200, map[string]any{"result": "OK"})
+	case path == "api/tasks":
+		t := f.tasks[q.Get("task_id")]
+		if t == nil {
+			writeJSON(w, 200, map[string]any{"count": 0, "results": []any{}})
+			return
+		}
+		if t.status == "pending" {
+			switch {
+			case f.taskNeverEnds:
+			case t.polls > 0:
+				t.polls--
+			case f.taskFails != "":
+				t.status = "failure"
+			default:
+				f.applyBulkEdit(t.body)
+				t.status = "success"
+			}
+		}
+		task := map[string]any{"task_id": q.Get("task_id"), "status": t.status}
+		if t.status == "failure" {
+			task["result_data"] = f.taskFails
+		}
+		writeJSON(w, 200, map[string]any{"count": 1, "results": []any{task}})
 	case path == "api/bulk_edit_objects":
 		kind := body["object_type"].(string)
 		require.Equal(f.t, "set_permissions", body["operation"])
@@ -635,6 +688,87 @@ func TestTidyMergeStopsBeforeDeletingWhenDocumentsRemain(t *testing.T) {
 	_, err = s.undo(context.Background(), a.ID, false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, *f.docs[1].StoragePath)
+}
+
+// shortTidyTaskWait makes the queued-task wait fast enough for a test.
+func shortTidyTaskWait(t *testing.T, total time.Duration) {
+	oldWait, oldMin, oldMax := tidyTaskWait, tidyTaskPollMin, tidyTaskPollMax
+	tidyTaskWait, tidyTaskPollMin, tidyTaskPollMax = total, time.Millisecond, 2*time.Millisecond
+	t.Cleanup(func() { tidyTaskWait, tidyTaskPollMin, tidyTaskPollMax = oldWait, oldMin, oldMax })
+}
+
+// paperless-ngx 3.5 queues a bulk edit and answers with a task_id. A merge
+// must wait for that task: reading back at once would find the documents
+// still on the source and stop before deleting it.
+func TestTidyMergeWaitsForQueuedBulkEdit(t *testing.T) {
+	shortTidyTaskWait(t, 5*time.Second)
+	f := newFakePaperless(t)
+	f.asyncBulk, f.taskPolls = true, 3
+	f.addObject("tags", 3, "Property", nil)
+	f.addObject("tags", 5, "Real Estate", nil)
+	f.addObject("correspondents", 1, "ACME Inc", nil)
+	f.addObject("correspondents", 2, "ACME", nil)
+	f.addDoc(tidyDoc{ID: 1, Tags: []int{3}, Correspondent: ip(1)})
+	f.addDoc(tidyDoc{ID: 2, Tags: []int{3, 5}})
+	s := newTestTidy(t, f)
+	ctx := context.Background()
+
+	a, err := s.merge(ctx, "tags", 3, 5)
+	require.NoError(t, err)
+	assert.Equal(t, "done", a.Status)
+	assert.Equal(t, []int{5}, f.docs[1].Tags)
+	assert.Equal(t, []int{5}, f.docs[2].Tags)
+	assert.Nil(t, f.objects["tags"][3], "the source is deleted once the queued edit has landed")
+
+	b, err := s.merge(ctx, "correspondents", 1, 2)
+	require.NoError(t, err)
+	assert.Equal(t, "done", b.Status)
+	assert.Equal(t, 2, *f.docs[1].Correspondent)
+
+	// The undo log holds the state after the edit, so undo does not see the
+	// documents as changed since.
+	_, err = s.undo(ctx, b.ID, false)
+	require.NoError(t, err)
+	var back int
+	for id, o := range f.objects["correspondents"] {
+		if o["name"] == "ACME Inc" {
+			back = id
+		}
+	}
+	require.NotZero(t, back)
+	assert.Equal(t, back, *f.docs[1].Correspondent)
+}
+
+func TestTidyMergeReportsFailedBulkEditTask(t *testing.T) {
+	shortTidyTaskWait(t, 5*time.Second)
+	f := newFakePaperless(t)
+	f.asyncBulk, f.taskFails = true, "Insufficient permissions to execute bulk operation"
+	f.addObject("storage_paths", 1, "Financial", nil)
+	f.addObject("storage_paths", 2, "Finance", nil)
+	f.addDoc(tidyDoc{ID: 1, StoragePath: ip(1)})
+	s := newTestTidy(t, f)
+
+	a, err := s.merge(context.Background(), "storage_paths", 1, 2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Insufficient permissions")
+	assert.Equal(t, "partial", a.Status)
+	assert.NotNil(t, f.objects["storage_paths"][1], "the source is kept")
+	assert.Equal(t, 1, *f.docs[1].StoragePath)
+}
+
+func TestTidyMergeStopsWhenBulkEditTaskDoesNotFinish(t *testing.T) {
+	shortTidyTaskWait(t, 30*time.Millisecond)
+	f := newFakePaperless(t)
+	f.asyncBulk, f.taskNeverEnds = true, true
+	f.addObject("storage_paths", 1, "Financial", nil)
+	f.addObject("storage_paths", 2, "Finance", nil)
+	f.addDoc(tidyDoc{ID: 1, StoragePath: ip(1)})
+	s := newTestTidy(t, f)
+
+	a, err := s.merge(context.Background(), "storage_paths", 1, 2)
+	require.ErrorIs(t, err, errTidyTaskStuck)
+	assert.Equal(t, "partial", a.Status)
+	assert.NotNil(t, f.objects["storage_paths"][1], "the source is kept")
 }
 
 func TestTidyDeleteEmptyAndUndo(t *testing.T) {

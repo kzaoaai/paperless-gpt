@@ -181,6 +181,12 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   Correspondents and tags paperless-gpt creates while processing (`CreateOrGetCorrespondent`,
   `CreateTag`) get that user's view grant as they are created (`viewer_grant.go`), so they no
   longer wait for the grant-view fix; a missing viewer user or a refused grant is only logged.
+- `documents/bulk_edit` is asynchronous from paperless-ngx 3.5: the request queues the edit and
+  answers with a `task_id`. `tidyBulkEdit` waits for that task (`tidyWaitTask`, up to 3 minutes a
+  chunk) before it returns, because every caller reads the documents back straight afterwards. An
+  answer with no `task_id` (3.4 and older) is not waited on. A task that fails or does not finish
+  is an error, so a merge stops as partial and keeps its source. `bulk_edit_objects` still runs
+  inside the request. The fake paperless does both (`asyncBulk`).
 - Inventory: one pass over every root document (paperless-ngx 3.0's list leaves file-version rows
   out) gives each object's count and newest `created`/`added`. Findings: no documents and nothing
   using it (queue and marker tags are empty by design, so in-use ones are not listed); near-duplicate
