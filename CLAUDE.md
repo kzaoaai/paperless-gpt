@@ -427,9 +427,10 @@ paperless-ngx, no container and no model (its header has the command; skipped un
 
 ### Open items
 
-- Production runs `ab91f69` (deployed 2026-11-17 23:20 UTC: an over-long text custom field is cut
-  to fit; rollback image `:bf55da65e6cd0b83ae54203a15c8142443d2a464`; earlier
-  builds `bf55da6` (the failure record, the failed-documents dialog and setting created dates), `ba87321` (the date checks' estimate for a gone source), `e2933e9` (the date
+- Production runs `3ef5567` (deployed 2026-11-18 02:05 UTC by the image card's auto-apply: Tidy
+  waits for the task a paperless-ngx 3.5 bulk edit returns, and the API-key backend pins the Gemini
+  API to v1beta; rollback image `:ab91f692136612219eb14d8436e94589c0ecf143`; earlier
+  builds `ab91f69` (an over-long text custom field is cut to fit), `bf55da6` (the failure record, the failed-documents dialog and setting created dates), `ba87321` (the date checks' estimate for a gone source), `e2933e9` (the date
   checks), `cf4ebfa` (new correspondents and
   tags get the viewer's view grant), `f15b944` (Fill and Split show current titles), `7c49471`, `d352785`, `b12aebd`,
   `c34e365`, `62659dd`, `341b7f2`, `c846093`, `db9990f`,
