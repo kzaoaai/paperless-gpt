@@ -586,7 +586,9 @@ func (app *App) processAutoOcrTagDocuments(ctx context.Context) (int, error) {
 			if ok, why := app.replaceEligibility(ctx, document.ID); ok {
 				options.UploadMode = PDFUploadModeReplace
 			} else {
-				docLogger.Infof("Not a new scan to replace (%s); a searchable PDF is added as a new version", why)
+				// Warn: production logs at warn, and a silent fallback to a
+				// version would look like replace mode not working.
+				docLogger.Warnf("Not replacing this document (%s); a searchable PDF is added as a new version", why)
 			}
 		}
 

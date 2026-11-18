@@ -753,6 +753,40 @@ func TestReplaceOnlyNewScans(t *testing.T) {
 	}
 }
 
+// A replaced scan restored from the trash is not replaced a second time.
+func TestReplaceRestoredScanIsNotReplacedAgain(t *testing.T) {
+	e := newReplaceEnv(t)
+	e.fake.addScan(100)
+	e.cycle(t)
+	require.True(t, e.fake.docs[100].Deleted)
+
+	scan := e.fake.docs[100] // restored, back in the queue
+	scan.Deleted = false
+	scan.Tags = []int{fakeInbox, fakeMatchedTag}
+
+	ok, why := e.app.replaceEligibility(context.Background(), 100)
+	assert.False(t, ok)
+	assert.Contains(t, why, "replaced by document")
+
+	e.cycle(t)
+
+	assert.Len(t, e.fake.uploads, 1, "no second replacement")
+	assert.Equal(t, 1, e.fake.versionUploads, "a version, as for any document that is not a new scan")
+	assert.False(t, e.fake.docs[100].Deleted)
+}
+
+// A document paperless-gpt uploaded as a replacement never qualifies itself.
+func TestReplaceReplacementNeverQualifies(t *testing.T) {
+	e := newReplaceEnv(t)
+	e.fake.addScan(100)
+	e.cycle(t)
+	r := e.replacement(t)
+
+	ok, why := e.app.replaceEligibility(context.Background(), r.ID)
+	assert.False(t, ok)
+	assert.Contains(t, why, "replacement of document 100")
+}
+
 // searchablePDF returns a searchable PDF this program made, by running replace
 // mode once.
 func searchablePDF(t *testing.T) []byte {

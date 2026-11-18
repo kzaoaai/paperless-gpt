@@ -262,12 +262,22 @@ func (app *App) replaceEligibility(ctx context.Context, documentID int) (bool, s
 	if err := ensureReplacementTable(app.Database); err != nil {
 		return false, fmt.Sprintf("could not create the replacement records: %v", err)
 	}
-	var open int64
-	if err := app.Database.Model(&OCRReplacement{}).Where("replacement_id = ? OR (original_id = ? AND state IN ?)", documentID, documentID, openReplaceStates).Count(&open).Error; err != nil {
+	// Any record but a refused upload rules it out: an open one is being
+	// replaced, a done or late one means this scan was replaced before and has
+	// been restored from the trash, a given-up one may have a copy on the way.
+	var recs []OCRReplacement
+	if err := app.Database.Where("replacement_id = ? OR (original_id = ? AND state <> ?)", documentID, documentID, replaceRejected).Find(&recs).Error; err != nil {
 		return false, fmt.Sprintf("could not read the replacement records: %v", err)
 	}
-	if open > 0 {
-		return false, "it is part of a replacement already"
+	for _, r := range recs {
+		switch {
+		case r.ReplacementID == documentID:
+			return false, fmt.Sprintf("it is the replacement of document %d", r.OriginalID)
+		case r.State == replaceDone || r.State == replaceLate:
+			return false, fmt.Sprintf("it was replaced by document %d before (restored from the trash?)", r.ReplacementID)
+		default:
+			return false, fmt.Sprintf("it has a replacement in state %q", r.State)
+		}
 	}
 	return true, ""
 }
