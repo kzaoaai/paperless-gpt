@@ -340,8 +340,8 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   stays not checked, with nothing added between its source and it. All three outcomes match a
   direct database query. The dialog's script was then run for the listed one in the
   paperless-ngx shell: the date changed, the file name did not, `modified` moved to now, and the
-  piece left the list. Setting created dates has been checked only on the demo server and in the
-  Go test.
+  piece left the list. Setting created dates was used in production on 2026-11-17 (two actions,
+  every listed document, and the list emptied); its undo has run only in the Go test.
 - Failed documents (`failure_log.go`, `tidy_failed.go`, `FailedDialog.tsx`; the "Marked failed by
   paperless-gpt" tile opens the dialog when its count is above zero). The fail tag used to say
   nothing: the reason was a log line. Now paperless-gpt keeps it in `processing_failures`
@@ -371,13 +371,13 @@ paperless-ngx, no container and no model (its header has the command; skipped un
   is not marked. The full text goes to the log as a warning, the only place it is kept. Only
   the `string` data type: paperless-ngx sets no such limit on the others. A record with no
   value (one written by hand from the log) gets advice that does not count the characters of
-  a text it does not have. The cut has run in the Go tests only: no live document has been
-  over the limit since the deploy.
+  a text it does not have. Seen working in production once (2026-11-17): a rerun document's
+  135-character answer was cut to 121. The cut can end mid-phrase.
   Checked on the demo server (all three actions, the count, the log) and in the Go tests,
-  which also cover the record written by a real `UpdateDocuments` call. In production (deployed
-  2026-11-17) the view has been read: it lists the one marked document, without a record since
-  it was marked before the deploy. No action has been run there yet, and no failure has been
-  recorded by live processing yet.
+  which also cover the record written by a real `UpdateDocuments` call. In production only
+  "Run again" has been used (once, 2026-11-17, and the document came back unmarked); saving a
+  corrected value, clearing the mark and undo have not, and no failure has been recorded by
+  live processing yet.
 - bulk_edit sends Document Updated for every moved document (`bulk_update_documents`), so paperless-ngx
   Document Updated workflows run on them; the merge preview lists the enabled ones.
 - Undo: merges and deletes recreate the object from its JSON (`set_permissions`, so a view grant comes
