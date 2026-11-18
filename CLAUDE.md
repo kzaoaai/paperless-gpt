@@ -177,8 +177,10 @@ symlink to AGENTS.md; here it is a regular file — on a sync conflict, keep thi
 
 ### Replace mode for new scans (fork-only, `AUTO_OCR_REPLACE`)
 
-Built 2026-11-18 (AA's decision: a version should mean someone added one on purpose); **not
-deployed, production does not set it**. In the auto-OCR queue a new scan's searchable PDF
+Built 2026-11-18 (AA's decision: a version should mean someone added one on purpose).
+**Deployed 2026-11-18 20:26 UTC** (fork `06da446`, `AUTO_OCR_REPLACE: "true"` in the compose;
+rollback: drop the variable, or the image `:pre-replace-20261118` = `3ef5567` on the CT; compose
+backup `/root/compose.yaml.bak-pre-replace-20261118`). Not yet seen on a real scan in production. In the auto-OCR queue a new scan's searchable PDF
 replaces the document instead of becoming a version (`replace_scan.go`, tests
 `replace_scan_test.go` against a stateful fake paperless-ngx 3.4):
 
@@ -497,10 +499,11 @@ paperless-ngx, no container and no model (its header has the command; skipped un
 
 ### Open items
 
-- Production runs `3ef5567` (deployed 2026-11-18 02:05 UTC by the image card's auto-apply: Tidy
+- Production runs `06da446` (deployed 2026-11-18 20:26 UTC with `AUTO_OCR_REPLACE: "true"`: the
+  auto-OCR queue replaces new scans, above; rollback image `:pre-replace-20261118` on the CT, the
+  registry's `:3ef556755c53c3f4d0adf8d149bdc709713a4648`); earlier builds `3ef5567` (Tidy
   waits for the task a paperless-ngx 3.5 bulk edit returns, and the API-key backend pins the Gemini
-  API to v1beta; rollback image `:ab91f692136612219eb14d8436e94589c0ecf143`; earlier
-  builds `ab91f69` (an over-long text custom field is cut to fit), `bf55da6` (the failure record, the failed-documents dialog and setting created dates), `ba87321` (the date checks' estimate for a gone source), `e2933e9` (the date
+  API to v1beta), `ab91f69` (an over-long text custom field is cut to fit), `bf55da6` (the failure record, the failed-documents dialog and setting created dates), `ba87321` (the date checks' estimate for a gone source), `e2933e9` (the date
   checks), `cf4ebfa` (new correspondents and
   tags get the viewer's view grant), `f15b944` (Fill and Split show current titles), `7c49471`, `d352785`, `b12aebd`,
   `c34e365`, `62659dd`, `341b7f2`, `c846093`, `db9990f`,
